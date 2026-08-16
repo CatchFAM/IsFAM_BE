@@ -1,0 +1,2 @@
+spring.datasource.username=postgres
+spring.datasource.password=본인_postgres_비번
