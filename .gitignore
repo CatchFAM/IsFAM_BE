@@ -45,3 +45,5 @@ application-secret.properties
 src/main/resources/firebase-service-account.json
 *.p8
 *.jks
+
+/docs
