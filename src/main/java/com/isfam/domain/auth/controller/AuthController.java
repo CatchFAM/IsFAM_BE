@@ -83,7 +83,14 @@ public class AuthController {
         return authService.getMe(userId);
     }
 
-    @PutMapping("/me/display-name")
+    /**
+     * 닉네임 수정.
+     *
+     * <p>경로는 명세대로 {@code PUT /auth/me} 입니다. 하위 경로로 빼두면 앱이 명세대로
+     * 짰을 때 405 가 납니다. 회원 탈퇴({@code DELETE /auth/me}, Phase 9)도 같은 경로에
+     * 메서드만 달리해 붙습니다.
+     */
+    @PutMapping("/me")
     public AuthDto.DisplayNameResponse updateDisplayName(
             @CurrentUser Long userId,
             @Valid @RequestBody AuthDto.DisplayNameRequest request) {

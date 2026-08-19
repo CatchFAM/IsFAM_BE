@@ -204,15 +204,32 @@ public class AuthService {
     @Transactional(readOnly = true)
     public AuthDto.MeResponse getMe(Long userId) {
         User user = findActiveUser(userId);
-        return new AuthDto.MeResponse(user.getId(), maskPhoneNumber(user.getPhoneNumber()),
-                user.getUserName(), user.getDisplayName());
+        return new AuthDto.MeResponse(
+                user.getId(),
+                user.getDisplayName(),
+                maskPhoneNumber(user.getPhoneNumber()),
+                user.getCreatedAt());
     }
 
+    /**
+     * 닉네임 수정.
+     *
+     * <p><b>saveAndFlush 가 필요합니다.</b> {@code @LastModifiedDate} 는 영속성 컨텍스트가
+     * flush 될 때 찍히므로, 그냥 반환하면 응답의 updated_at 이 <i>변경 전</i> 값입니다.
+     * 눈에 잘 안 띄는데, 앱이 이 값을 캐시 무효화 기준으로 쓰면 갱신이 한 박자 밀립니다.
+     *
+     * <p>여기서 밀린 users.updated_at 이 Phase 7 의 GET /family/embeddings 에서
+     * 멤버별 updated_at 계산에 들어갑니다 — 그래서 같은 공간 멤버 폰이 다음 동기화에서
+     * 새 닉네임을 받습니다. 별도 푸시는 쏘지 않습니다(service-flow.md 9장).
+     */
     @Transactional
     public AuthDto.DisplayNameResponse updateDisplayName(Long userId, String displayName) {
         User user = findActiveUser(userId);
         user.changeDisplayName(displayName);
-        return new AuthDto.DisplayNameResponse(user.getId(), user.getDisplayName());
+        userRepository.saveAndFlush(user);
+
+        return new AuthDto.DisplayNameResponse(
+                user.getId(), user.getDisplayName(), user.getUpdatedAt());
     }
 
     // ── 내부 ────────────────────────────────────────────────
