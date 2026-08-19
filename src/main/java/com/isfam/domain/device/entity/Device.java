@@ -8,8 +8,8 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.Index;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -21,14 +21,26 @@ import lombok.NoArgsConstructor;
  * 알림 on/off, OS 권한 3종, 배터리 최적화 예외가 계정이 아니라 단말 단위로 관리됩니다.
  * 한 계정이 폰 두 대를 쓰면 각각 따로 설정됩니다.
  *
+ * <p><b>(user_id, push_token) 은 유니크입니다.</b> POST /devices 의 중복 판정 키인데
+ * 인덱스만 걸려 있으면 동시 호출에서 조회-후-저장이 겹쳐 같은 조합의 row 가 둘 생깁니다.
+ * 그 뒤로는 {@code findByUserIdAndPushToken} 이 Optional 을 못 만들어
+ * <b>그 사용자의 POST /devices 가 영구히 500</b> 이 됩니다 — 복구도 안 됩니다.
+ * 제약이 있으면 경합에서 진 쪽만 한 번 실패하고, 앱이 재시도하면 조회 경로로 붙어
+ * 정상 처리됩니다(앱은 device_id 가 없으면 실행 시마다 이 API 를 부릅니다).
+ * 그래서 서비스 계층에 별도 재시도 로직을 두지 않았습니다.
+ *
+ * <p>Postgres 유니크 인덱스는 NULL 을 서로 다른 값으로 취급하므로
+ * "push_token 없는 요청은 매번 새로 등록됨" 정책과 충돌하지 않습니다.
+ *
  * <p>ERD 의 on_device_model_version · embedding_synced_at · last_sync_trigger 는
  * 아직 매핑하지 않았습니다. PUT /devices/me/sync-status(Phase 7)와 MODEL_001 판정(Phase 8)에서
  * 처음 쓰이며, 그때 필드를 추가하면 ddl-auto=update 가 컬럼을 붙입니다.
  */
 @Getter
 @Entity
-@Table(name = "devices", indexes = {
-        @Index(name = "idx_devices_user_push_token", columnList = "user_id, push_token")
+@Table(name = "devices", uniqueConstraints = {
+        @UniqueConstraint(name = "uq_devices_user_push_token",
+                columnNames = {"user_id", "push_token"})
 })
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Device extends BaseTimeEntity {
