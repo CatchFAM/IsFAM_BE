@@ -84,8 +84,11 @@ public class FamilyMembership extends BaseTimeEntity {
      * 없으므로 제공 자체가 발생하지 않습니다. 받은 적 없는 동의를 시각만 찍어 남기면
      * 분쟁 시 그게 동의 증빙으로 오독됩니다 — 그래서 null 로 둡니다.
      *
-     * <p>Phase 4 에서 다른 사람이 이 공간에 들어오는 시점에 owner 에게도 동의를 받아
-     * 이 값을 채우는 흐름이 필요합니다.
+     * <p>Phase 4 에서 owner 가 초대 링크를 <b>만들 때</b> 동의를 함께 받아 이 값을 채웁니다
+     * (POST /family/invite-code 의 voice_sharing_consent — 명세 확장).
+     * 링크 생성은 "이제부터 내 임베딩이 남의 기기로 나간다"는 첫 시점이라 동의 획득 지점으로 맞습니다.
+     * 동의를 보내지 않으면 여전히 null 이고, <b>null 인 멤버의 임베딩은 Phase 7 배포 대상에서
+     * 제외해야 합니다.</b>
      */
     @Column(name = "voice_sharing_consented_at")
     private Instant voiceSharingConsentedAt;
@@ -108,7 +111,7 @@ public class FamilyMembership extends BaseTimeEntity {
         return new FamilyMembership(familyId, userId, Role.OWNER, null, joinedAt);
     }
 
-    /** 초대 수락(Phase 4). voice_sharing_consent=true 를 받은 시각이 들어갑니다 */
+    /** 초대 수락. voice_sharing_consent=true 를 받은 시각이 들어갑니다 */
     public static FamilyMembership join(Long familyId, Long userId,
                                         Instant consentedAt, Instant joinedAt) {
         return new FamilyMembership(familyId, userId, Role.MEMBER, consentedAt, joinedAt);
@@ -134,5 +137,25 @@ public class FamilyMembership extends BaseTimeEntity {
 
     public void consentVoiceSharing(Instant consentedAt) {
         this.voiceSharingConsentedAt = consentedAt;
+    }
+
+    /**
+     * 나갔던 공간에 초대로 다시 들어옴.
+     *
+     * <p><b>새 row 를 만들면 안 됩니다.</b> {@code (family_id, user_id)} 가 유니크라
+     * insert 하면 제약 위반으로 터집니다. 이력 보존 규칙 때문에 나간 row 가 그대로 남아 있으니
+     * 그 row 를 되살리는 게 유일한 경로입니다.
+     *
+     * <p>역할은 <b>항상 MEMBER 로 리셋</b>합니다. 예전에 owner 였다 해도 지금은 초대받아
+     * 들어오는 입장이고, 그 공간엔 이미 다른 owner 가 있습니다.
+     *
+     * <p>{@code joinedAt} 과 동의 시각도 새로 찍습니다 — 지난번 동의로 이번 제공까지
+     * 커버되지 않습니다.
+     */
+    public void rejoin(Instant consentedAt, Instant joinedAt) {
+        this.memberRole = Role.MEMBER;
+        this.status = Status.ACTIVE;
+        this.voiceSharingConsentedAt = consentedAt;
+        this.joinedAt = joinedAt;
     }
 }

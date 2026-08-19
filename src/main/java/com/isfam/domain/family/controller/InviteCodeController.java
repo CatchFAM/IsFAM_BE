@@ -1,0 +1,66 @@
+package com.isfam.domain.family.controller;
+
+import com.isfam.common.security.CurrentUser;
+import com.isfam.domain.family.dto.InvitationDto;
+import com.isfam.domain.family.service.InvitationService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * 초대 링크 관리 — 공간을 가진 쪽에서 부르는 API 입니다.
+ * 초대를 받는 쪽은 {@link InvitationController} 를 씁니다.
+ *
+ * <p>전부 인증이 필요합니다. FamilyController 와 경로 접두사({@code /family})가 겹치지만
+ * 다루는 리소스가 달라 컨트롤러를 나눴습니다.
+ */
+@RestController
+@RequestMapping("/family/invite-code")
+@RequiredArgsConstructor
+public class InviteCodeController {
+
+    private final InvitationService invitationService;
+
+    /**
+     * 초대 화면 진입 시 호출.
+     *
+     * <p>코드가 없거나 만료·비활성이어도 <b>200</b> 이고 전 필드가 null 입니다.
+     * 앱은 이걸 보고 "초대 링크 만들기" 버튼을 띄웁니다.
+     */
+    @GetMapping
+    public InvitationDto.InviteCodeResponse getInviteCode(@CurrentUser Long userId) {
+        return invitationService.getInviteCode(userId);
+    }
+
+    /**
+     * "링크 새로 만들기" 버튼 전용 — <b>화면 진입 시 부르면 안 됩니다.</b>
+     * 기존 코드가 즉시 죽어서 방금 공유한 링크가 무효가 됩니다.
+     *
+     * <p>본문은 선택입니다({@code required = false}). 명세상 입력이 없는 API 라
+     * 본문 없이 보내는 클라이언트가 정상이고, {@code voice_sharing_consent} 는
+     * 링크를 만드는 사람의 제3자 제공 동의를 받는 확장 필드입니다.
+     *
+     * <p>201 이 아니라 200 인 이유: 새로 주소가 생기는 게 아니라 기존 리소스 하나의 값이
+     * 교체되는 동작이고, 응답 형태가 GET 과 완전히 같아서 앱이 파서를 공유합니다.
+     */
+    @PostMapping
+    public InvitationDto.InviteCodeResponse issueInviteCode(
+            @CurrentUser Long userId,
+            @RequestBody(required = false) InvitationDto.IssueRequest request) {
+        return invitationService.issueInviteCode(
+                userId, request == null ? null : request.voiceSharingConsent());
+    }
+
+    /** owner 전용. 링크를 죽입니다(403 FAMILY_003) */
+    @DeleteMapping
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deactivateInviteCode(@CurrentUser Long userId) {
+        invitationService.deactivateInviteCode(userId);
+    }
+}
