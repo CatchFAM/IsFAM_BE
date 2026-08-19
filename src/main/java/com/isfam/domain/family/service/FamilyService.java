@@ -9,9 +9,13 @@ import com.isfam.domain.family.entity.Family;
 import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
 import com.isfam.domain.family.repository.FamilyRepository;
+import com.isfam.domain.notification.entity.Notification;
+import com.isfam.domain.notification.service.NotificationService;
 import com.isfam.domain.voice.repository.VoiceprintRepository;
+import com.isfam.infra.push.event.FamilySyncEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,10 +35,13 @@ import java.util.stream.Collectors;
  * <p><b>owner 권한 검사는 전부 여기서 합니다.</b> DB 를 봐야 판단되는 조건이라
  * SecurityConfig 의 URL 패턴으로는 결정되지 않습니다.
  *
- * <p><b>동기화 푸시(Phase 5)는 아직 없습니다.</b> 대신 발송 대상을 <i>상태 변경 전에</i>
- * 수집하는 순서만 미리 잡아뒀습니다. service-flow.md 12장이 "삭제 처리 후에 푸시 대상 조회"를
- * 자주 틀리는 지점으로 꼽는데, 그 순서로 짜면 강퇴당한 사람 폰에 남의 생체정보가 그대로
- * 남습니다. 나중에 푸시를 끼워 넣을 때 순서를 다시 고민하지 않도록 지금 고정합니다.
+ * <p><b>발송 대상은 반드시 상태 변경 <i>전에</i> 수집합니다.</b> service-flow.md 12장이
+ * "삭제 처리 후에 푸시 대상 조회"를 자주 틀리는 지점으로 꼽는데, 그 순서로 짜면 나간 사람이
+ * 목록에서 빠져 그 폰에 남의 생체정보가 그대로 남습니다.
+ *
+ * <p>푸시 자체는 여기서 보내지 않습니다. {@link FamilySyncEvent} 를 발행하면
+ * {@code PushDispatcher} 가 <b>커밋 후에</b> 받아 발송합니다 — 롤백된 변경에 대해
+ * 푸시가 나가는 걸 막고, FCM 장애로 멤버십 변경이 통째로 롤백되는 것도 막습니다.
  */
 @Slf4j
 @Service
@@ -47,6 +54,8 @@ public class FamilyService {
     private final FamilyMembershipRepository membershipRepository;
     private final UserRepository userRepository;
     private final VoiceprintRepository voiceprintRepository;
+    private final NotificationService notificationService;
+    private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
     // ── 공간 생성 ───────────────────────────────────────────
@@ -160,6 +169,8 @@ public class FamilyService {
      */
     @Transactional
     public void removeMember(Long userId, Long targetUserId) {
+        Instant now = clock.instant();
+
         FamilyMembership myMembership = findMyActiveMembership(userId);
         Long familyId = myMembership.getFamilyId();
 
@@ -188,9 +199,28 @@ public class FamilyService {
             target.remove();
         }
 
-        // TODO(Phase 5): syncTargets 의 단말에 family_sync 푸시 발송
-        //   reason = member_removed, 대상 = 남은 멤버 전원 + 방금 나간/강퇴된 사람
-        log.debug("가족 구성 변경 — 동기화 푸시 대상 {}건 (familyId={})", syncTargets.size(), familyId);
+        // ── 알림함 ──────────────────────────────────────────
+        // 대상은 "남은 멤버"입니다. 나간 본인은 자기가 나간 걸 알고, 내보낸 owner 도
+        // 자기가 누른 버튼이라 알림을 받을 이유가 없습니다.
+        // 자진 탈퇴(isSelf)면 userId == targetUserId 라 남은 전원이 받습니다.
+        String targetName = userRepository.findById(targetUserId)
+                .map(User::getDisplayName)
+                .orElse("구성원");
+
+        Set<Long> notifyTargets = new HashSet<>(syncTargets);
+        notifyTargets.remove(targetUserId);
+        notifyTargets.remove(userId);
+        notifyTargets.forEach(memberId ->
+                notificationService.create(Notification.memberLeft(memberId, targetName)));
+
+        // ── 동기화 푸시 ─────────────────────────────────────
+        // syncTargets 에는 방금 나간/강퇴된 사람이 포함돼 있습니다. 그 폰도 깨워서
+        // GET /family/embeddings 에서 404(FAMILY_002)를 받고 로컬 임베딩을 지워야 합니다.
+        eventPublisher.publishEvent(new FamilySyncEvent(
+                syncTargets, FamilySyncEvent.Reason.MEMBER_REMOVED, familyId, now));
+
+        log.debug("가족 구성 변경 — 동기화 대상 {}건, 알림 {}건 (familyId={})",
+                syncTargets.size(), notifyTargets.size(), familyId);
     }
 
     // ── 내부 ────────────────────────────────────────────────

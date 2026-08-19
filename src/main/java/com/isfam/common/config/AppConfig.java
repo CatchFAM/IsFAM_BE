@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
+import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -21,10 +22,15 @@ import java.time.Clock;
 import java.util.List;
 
 /**
- * 애플리케이션 공통 설정 — 리졸버 등록 · JPA Auditing · Clock · OpenAPI.
+ * 애플리케이션 공통 설정 — 리졸버 등록 · JPA Auditing · Clock · 비동기 · OpenAPI.
  * 각각 빈 하나짜리라 파일을 나누지 않았습니다.
+ *
+ * <p>{@code @EnableAsync} 는 Phase 5 의 {@code PushDispatcher} 때문에 필요합니다.
+ * 이게 없으면 {@code @Async} 가 조용히 무시되고 FCM 왕복이 HTTP 응답을 붙잡습니다 —
+ * 에러가 나지 않아서 알아채기 어렵습니다.
  */
 @Configuration
+@EnableAsync
 @EnableJpaAuditing
 @RequiredArgsConstructor
 public class AppConfig implements WebMvcConfigurer {
