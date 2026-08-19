@@ -22,5 +22,12 @@ public interface FamilyMembershipRepository extends JpaRepository<FamilyMembersh
     Optional<FamilyMembership> findByFamilyIdAndUserIdAndStatus(
             Long familyId, Long userId, FamilyMembership.Status status);
 
+    /**
+     * <b>status 를 안 봅니다.</b> 초대 수락에서 "예전에 나갔던 row"를 찾으려면 이게 필요합니다.
+     * active 만 조회하고 없으면 insert 하는 식으로 짜면 재가입에서
+     * {@code uq_membership_family_user} 위반으로 터집니다.
+     */
+    Optional<FamilyMembership> findByFamilyIdAndUserId(Long familyId, Long userId);
+
     long countByFamilyIdAndStatus(Long familyId, FamilyMembership.Status status);
 }
