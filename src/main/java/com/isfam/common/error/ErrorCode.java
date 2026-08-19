@@ -36,7 +36,14 @@ public enum ErrorCode {
 
     VOICE_001(HttpStatus.UNPROCESSABLE_ENTITY, "음질이 부족해요. 조용한 곳에서 다시 녹음해 주세요"),
     DEVICE_001(HttpStatus.UNPROCESSABLE_ENTITY, "통화 자동녹음을 지원하지 않는 기기예요"),
-    DEVICE_002(HttpStatus.BAD_REQUEST, "단말 정보(X-Device-Id)가 필요해요"), // [확장]
+    /**
+     * [확장] X-Device-Id 누락·형식 오류·타인 단말.
+     *
+     * <p>401 인 이유는 service-flow.md 12장 "자주 틀리는 지점" 에
+     * {@code device_id 없이 X-Device-Id 필요한 API 호출 → 401} 로 명시돼 있어서입니다.
+     * 앱의 복구 동작은 POST /devices 재등록입니다.
+     */
+    DEVICE_002(HttpStatus.UNAUTHORIZED, "단말 정보가 필요해요"),
     MODEL_001(HttpStatus.UNPROCESSABLE_ENTITY, "앱을 최신 버전으로 업데이트해 주세요"),
 
     // [확장] 공통
