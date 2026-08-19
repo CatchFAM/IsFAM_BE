@@ -9,9 +9,13 @@ import com.isfam.domain.family.entity.Family;
 import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
 import com.isfam.domain.family.repository.FamilyRepository;
+import com.isfam.domain.notification.entity.Notification;
+import com.isfam.domain.notification.service.NotificationService;
+import com.isfam.infra.push.event.FamilySyncEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -47,6 +51,8 @@ public class InvitationService {
     private final FamilyMembershipRepository membershipRepository;
     private final UserRepository userRepository;
     private final InviteCodeGenerator inviteCodeGenerator;
+    private final NotificationService notificationService;
+    private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
     /** 명세 [정책] 만료 72시간 */
@@ -226,13 +232,27 @@ public class InvitationService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.AUTH_009));
 
-        // TODO(Phase 5): 동기화 푸시 — 기존 멤버는 새 멤버의 임베딩을, 새 멤버는 가족 전원의
-        //   임베딩을 받아야 하므로 대상에 본인을 포함합니다. reason = member_joined.
-        // TODO(Phase 5): notifications INSERT — type=member_joined, 대상은 본인 제외한 기존 멤버.
-        //   여길 빼먹으면 알림함이 영원히 빈 화면입니다(service-flow.md 12장).
+        // ── 동기화 대상 ─────────────────────────────────────
+        // 방금 들어온 본인을 포함합니다. 기존 멤버는 새 멤버의 임베딩을, 새 멤버는
+        // 가족 전원의 임베딩을 받아야 하므로 양쪽 다 깨워야 합니다.
         Set<Long> syncTargets = collectSyncTargets(family.getId());
-        log.debug("초대 수락 — 동기화 푸시 대상 {}건 (familyId={}, userId={})",
-                syncTargets.size(), family.getId(), userId);
+
+        // ── 알림함 ──────────────────────────────────────────
+        // 본인은 제외합니다. 방금 수락 버튼을 누른 사람에게 "참여했어요" 알림은 소음입니다.
+        Set<Long> notifyTargets = new HashSet<>(syncTargets);
+        notifyTargets.remove(userId);
+        notifyTargets.forEach(memberId ->
+                notificationService.create(
+                        Notification.memberJoined(memberId, user.getDisplayName())));
+
+        // ── 동기화 푸시 ─────────────────────────────────────
+        // 커밋 후에 발송됩니다. 여기서 FCM 을 직접 부르면 정원 검사를 위해 잡아둔
+        // 공간 행 잠금(findByInviteCodeForUpdate)이 네트워크 왕복 동안 유지됩니다.
+        eventPublisher.publishEvent(new FamilySyncEvent(
+                syncTargets, FamilySyncEvent.Reason.MEMBER_JOINED, family.getId(), now));
+
+        log.debug("초대 수락 — 동기화 대상 {}건, 알림 {}건 (familyId={}, userId={})",
+                syncTargets.size(), notifyTargets.size(), family.getId(), userId);
 
         return new InvitationDto.AcceptResponse(
                 family.getId(),
