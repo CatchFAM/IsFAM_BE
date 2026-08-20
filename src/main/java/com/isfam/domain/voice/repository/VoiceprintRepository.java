@@ -2,6 +2,7 @@ package com.isfam.domain.voice.repository;
 
 import com.isfam.domain.voice.entity.Voiceprint;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -23,4 +24,19 @@ public interface VoiceprintRepository extends JpaRepository<Voiceprint, Long> {
      */
     @Query("select v.userId from Voiceprint v where v.userId in :userIds")
     List<Long> findRegisteredUserIds(@Param("userIds") Collection<Long> userIds);
+
+    /**
+     * GET /family/embeddings 용 (Phase 7).
+     *
+     * <p>임베딩 본문까지 필요하므로 위 메서드와 달리 엔티티를 통째로 가져옵니다.
+     * 가족 정원이 8명이라 한 번에 받아도 크기가 뻔합니다(796B × 7).
+     */
+    List<Voiceprint> findByUserIdIn(Collection<Long> userIds);
+
+    /**
+     * 회원 탈퇴 시 물리 삭제(Phase 9). 생체정보는 soft delete 가 허용되지 않습니다.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from Voiceprint v where v.userId = :userId")
+    int deleteAllByUserId(@Param("userId") Long userId);
 }
