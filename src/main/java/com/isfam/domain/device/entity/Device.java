@@ -35,9 +35,10 @@ import java.time.Instant;
  * <p>Postgres 유니크 인덱스는 NULL 을 서로 다른 값으로 취급하므로
  * "push_token 없는 요청은 매번 새로 등록됨" 정책과 충돌하지 않습니다.
  *
- * <p>ERD 의 on_device_model_version 은 아직 매핑하지 않았습니다.
- * MODEL_001 판정에서 처음 쓰이며(Phase 8), 그때 필드를 추가하면
- * ddl-auto=update 가 컬럼을 붙입니다.
+ * <p>ERD 의 on_device_model_version 은 <b>매핑하지 않기로 했습니다</b>(Phase 8).
+ * MODEL_001 을 판정하는 POST /voice-analyses 의 입력에 X-Device-Id 가 없어서
+ * 어느 단말의 버전인지 특정할 수 없기 때문입니다. 판정은 요청 본문의
+ * on_device_model_version 값으로만 합니다.
  */
 @Getter
 @Entity
