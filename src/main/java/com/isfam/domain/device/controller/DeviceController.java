@@ -60,6 +60,21 @@ public class DeviceController {
         return deviceService.updatePushToken(userId, deviceId, request.pushToken());
     }
 
+    /**
+     * 임베딩을 로컬에 <b>저장까지</b> 마쳤다는 보고 (Phase 7).
+     *
+     * <p>{@code GET /family/embeddings} 성공만으로는 폰에 저장됐는지 서버가 알 수 없어,
+     * 이 호출이 와야 동기화 완료로 간주합니다. {@code synced_at} 은 GET 응답의 값을
+     * 그대로 되돌려주세요 — 폰 로컬 시각을 쓰면 임베딩이 조용히 누락됩니다.
+     */
+    @PutMapping("/devices/me/sync-status")
+    public DeviceDto.SyncStatusResponse updateSyncStatus(
+            @CurrentUser Long userId,
+            @DeviceId Long deviceId,
+            @Valid @RequestBody DeviceDto.SyncStatusRequest request) {
+        return deviceService.updateSyncStatus(userId, deviceId, request);
+    }
+
     /** 온디바이스 화자 모델 버전. 스플래시(비인증)에서 부를 수 있는 두 API 중 하나 */
     @GetMapping("/model-info")
     public DeviceDto.ModelInfoResponse getModelInfo() {

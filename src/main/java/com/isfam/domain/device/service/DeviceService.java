@@ -2,6 +2,7 @@ package com.isfam.domain.device.service;
 
 import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
+import com.isfam.common.model.ModelVersionPolicy;
 import com.isfam.domain.device.dto.DeviceDto;
 import com.isfam.domain.device.dto.SettingsDto;
 import com.isfam.domain.device.entity.Device;
@@ -13,10 +14,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Set;
 
 /**
- * 단말 등록 · 통화녹음 지원 여부 · 설정 · 모델 정보.
+ * 단말 등록 · 통화녹음 지원 여부 · 설정 · 동기화 상태 · 모델 정보.
  *
  * <p>/settings 항목이 devices 컬럼이라 설정도 여기서 함께 다룹니다.
  */
@@ -37,13 +41,15 @@ public class DeviceService {
 
     private static final String GUIDANCE_URL_FORMAT = "https://isfam.app/guide/%s-call-recording";
 
+    /**
+     * 서버 시각보다 이만큼까지 앞선 synced_at 은 시계 오차로 보고 받아줍니다.
+     * 그 이상은 클라이언트가 값을 직접 만든 것으로 간주하고 현재 시각으로 끌어내립니다.
+     */
+    private static final Duration CLOCK_SKEW_TOLERANCE = Duration.ofMinutes(5);
+
     private final DeviceRepository deviceRepository;
-
-    @Value("${isfam.model.latest-version}")
-    private String latestModelVersion;
-
-    @Value("${isfam.model.min-supported-version}")
-    private String minSupportedVersion;
+    private final ModelVersionPolicy modelVersionPolicy;
+    private final Clock clock;
 
     /** 서버가 강제 업데이트를 걸 때만 true. 평상시 버전 비교는 앱이 합니다 */
     @Value("${isfam.model.update-required:false}")
@@ -133,6 +139,42 @@ public class DeviceService {
         return new DeviceDto.PushTokenResponse(device.getId(), device.getPushToken());
     }
 
+    // ── 임베딩 동기화 상태 (Phase 7) ────────────────────────
+
+    /**
+     * {@code PUT /devices/me/sync-status} — 폰이 임베딩을 <b>저장까지</b> 마쳤다는 보고.
+     *
+     * <p>GET 성공만으로는 로컬 저장 여부를 서버가 알 수 없어서 이 호출이 와야
+     * 동기화 완료로 간주합니다. 이 값이 오래 갱신되지 않는 단말은 푸시가 안 닿고 있다는
+     * 신호이며, 그 단말에는 이미 나간 가족의 임베딩이 남아 있을 수 있습니다.
+     *
+     * <p><b>미래 시각은 현재 시각으로 끌어내립니다.</b> {@code synced_at} 은 GET 응답을
+     * 그대로 되돌려주게 돼 있지만, 앱이 실수로 자기 시계를 쓰면 폰이 조금만 앞서도
+     * 그 사이 갱신분이 다음 since 에서 통째로 누락됩니다. 422 로 거절하면 단말이
+     * 영영 "미동기화" 로 남아 관측이 안 되므로, 보정하고 경고를 남깁니다.
+     */
+    @Transactional
+    public DeviceDto.SyncStatusResponse updateSyncStatus(
+            Long userId, Long deviceId, DeviceDto.SyncStatusRequest request) {
+
+        Device device = findMyDevice(userId, deviceId);
+        Device.SyncTrigger trigger = parseSyncTrigger(request.syncTrigger());
+
+        Instant now = clock.instant();
+        Instant syncedAt = request.syncedAt();
+
+        if (syncedAt.isAfter(now.plus(CLOCK_SKEW_TOLERANCE))) {
+            log.warn("미래 시각의 synced_at 보정 — deviceId={}, 받은 값={}, 보정={}",
+                    deviceId, syncedAt, now);
+            syncedAt = now;
+        }
+
+        device.recordEmbeddingSync(syncedAt, trigger);
+
+        return new DeviceDto.SyncStatusResponse(
+                device.getId(), device.getEmbeddingSyncedAt(), device.getLastSyncTrigger());
+    }
+
     // ── 설정 ────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
@@ -165,12 +207,15 @@ public class DeviceService {
     /**
      * 스플래시에서 부를 수 있는 두 API 중 하나입니다.
      * 앱이 자기 버전과 비교하므로 서버는 값만 내려줍니다.
+     *
+     * <p>버전 문자열은 {@link ModelVersionPolicy} 에서 가져옵니다 — MODEL_001 을 판정하는
+     * 쪽과 값을 내려주는 쪽이 갈리면, 앱이 "지원한다고 들은 버전"으로 요청했는데 거절당합니다.
      */
     @Transactional(readOnly = true)
     public DeviceDto.ModelInfoResponse getModelInfo() {
         return new DeviceDto.ModelInfoResponse(
-                latestModelVersion,
-                minSupportedVersion,
+                modelVersionPolicy.getLatestVersion(),
+                modelVersionPolicy.getMinSupportedVersion(),
                 modelUpdateRequired,
                 StringUtils.hasText(modelDownloadUrl) ? modelDownloadUrl : null);
     }
@@ -194,6 +239,15 @@ public class DeviceService {
             return Device.Platform.from(platform);
         } catch (IllegalArgumentException e) {
             throw new BusinessException(ErrorCode.COMMON_001, "지원하지 않는 플랫폼이에요");
+        }
+    }
+
+    private Device.SyncTrigger parseSyncTrigger(String syncTrigger) {
+        try {
+            return Device.SyncTrigger.from(syncTrigger);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(ErrorCode.COMMON_001,
+                    "sync_trigger 는 push, joined, periodic, foreground 중 하나여야 해요");
         }
     }
 
