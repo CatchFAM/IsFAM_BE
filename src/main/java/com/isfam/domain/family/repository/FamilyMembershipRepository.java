@@ -19,6 +19,16 @@ public interface FamilyMembershipRepository extends JpaRepository<FamilyMembersh
     List<FamilyMembership> findByFamilyIdAndStatusOrderByJoinedAtAsc(
             Long familyId, FamilyMembership.Status status);
 
+    /**
+     * <b>status 를 안 가립니다.</b> {@code GET /family/embeddings}(Phase 7)에서
+     * {@code removed_user_ids} 를 계산하려면 나간 사람의 row 가 필요합니다.
+     * active 만 조회하면 강퇴당한 사람이 목록에서 사라져, 남은 가족 폰에 그 사람의
+     * 생체정보가 영영 남습니다.
+     *
+     * <p>한 공간의 row 는 정원 8명 + 나간 이력이라 전량을 메모리에 올려도 괜찮습니다.
+     */
+    List<FamilyMembership> findByFamilyId(Long familyId);
+
     Optional<FamilyMembership> findByFamilyIdAndUserIdAndStatus(
             Long familyId, Long userId, FamilyMembership.Status status);
 

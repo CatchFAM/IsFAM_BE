@@ -1,5 +1,6 @@
 package com.isfam.domain.device.entity;
 
+import com.fasterxml.jackson.annotation.JsonValue;
 import com.isfam.common.entity.BaseTimeEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -13,6 +14,8 @@ import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+
+import java.time.Instant;
 
 /**
  * 단말 1대.
@@ -32,9 +35,9 @@ import lombok.NoArgsConstructor;
  * <p>Postgres 유니크 인덱스는 NULL 을 서로 다른 값으로 취급하므로
  * "push_token 없는 요청은 매번 새로 등록됨" 정책과 충돌하지 않습니다.
  *
- * <p>ERD 의 on_device_model_version · embedding_synced_at · last_sync_trigger 는
- * 아직 매핑하지 않았습니다. PUT /devices/me/sync-status(Phase 7)와 MODEL_001 판정(Phase 8)에서
- * 처음 쓰이며, 그때 필드를 추가하면 ddl-auto=update 가 컬럼을 붙입니다.
+ * <p>ERD 의 on_device_model_version 은 아직 매핑하지 않았습니다.
+ * MODEL_001 판정에서 처음 쓰이며(Phase 8), 그때 필드를 추가하면
+ * ddl-auto=update 가 컬럼을 붙입니다.
  */
 @Getter
 @Entity
@@ -56,6 +59,40 @@ public class Device extends BaseTimeEntity {
                 }
             }
             throw new IllegalArgumentException("지원하지 않는 플랫폼: " + value);
+        }
+    }
+
+    /**
+     * 임베딩 동기화가 무엇 때문에 일어났는지 (Phase 7).
+     *
+     * <p>명세의 용도는 <b>"푸시가 안 닿는 단말을 관리 화면에서 골라내는 것"</b>입니다.
+     * {@code PUSH} 없이 {@code PERIODIC} 만 쌓이는 단말은 FCM 토큰이 죽었거나
+     * 배터리 최적화에 걸린 상태라, 가족 구성이 바뀌어도 최대 6시간 동안 남의 생체정보를
+     * 들고 있게 됩니다. 통계용 필드처럼 보이지만 실제로는 회수 지연을 감지하는 수단입니다.
+     */
+    public enum SyncTrigger {
+        /** 동기화 푸시 수신 — 정상 경로 */
+        PUSH,
+        /** 공간 참여 직후(생성·초대 수락) */
+        JOINED,
+        /** WorkManager 6시간 주기 — 푸시 유실 시 안전망 */
+        PERIODIC,
+        /** 앱 포그라운드 진입 */
+        FOREGROUND;
+
+        @JsonValue
+        public String toJson() {
+            return name().toLowerCase();
+        }
+
+        /** 요청 본문은 "push" 소문자로 옵니다 */
+        public static SyncTrigger from(String value) {
+            for (SyncTrigger trigger : values()) {
+                if (trigger.name().equalsIgnoreCase(value)) {
+                    return trigger;
+                }
+            }
+            throw new IllegalArgumentException("지원하지 않는 sync_trigger: " + value);
         }
     }
 
@@ -106,6 +143,21 @@ public class Device extends BaseTimeEntity {
 
     @Column(name = "battery_optimization_ignored", nullable = false)
     private boolean batteryOptimizationIgnored;
+
+    /**
+     * 이 단말이 가족 임베딩을 <b>저장까지</b> 마친 시각 (Phase 7).
+     *
+     * <p>GET 성공만으로는 폰에 저장됐는지 서버가 알 수 없어서,
+     * {@code PUT /devices/me/sync-status} 가 와야 완료로 간주합니다.
+     * 값은 GET 응답의 {@code synced_at} 을 그대로 되돌려받은 것이며,
+     * 클라이언트가 자기 시계로 만든 값이 아닙니다.
+     */
+    @Column(name = "embedding_synced_at")
+    private Instant embeddingSyncedAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "last_sync_trigger", length = 20)
+    private SyncTrigger lastSyncTrigger;
 
     private Device(Long userId, Platform platform, String manufacturer, String deviceModel,
                    String osVersion, String pushToken, boolean callRecordingSupported) {
@@ -170,5 +222,23 @@ public class Device extends BaseTimeEntity {
 
     public void updateNotificationEnabled(boolean notificationEnabled) {
         this.notificationEnabled = notificationEnabled;
+    }
+
+    /**
+     * 임베딩 동기화 완료 기록 (Phase 7).
+     *
+     * <p><b>뒤로 가지 않습니다.</b> 늦게 도착한 오래된 보고가 최신 기록을 덮으면,
+     * 관리 화면에서 멀쩡한 단말이 "동기화 지연"으로 잡힙니다. 순서가 뒤바뀌는 건
+     * 재시도·오프라인 큐에서 흔한 일이라 방어해 둡니다.
+     * {@code lastSyncTrigger} 도 시각과 함께 움직여야 짝이 맞습니다.
+     */
+    public void recordEmbeddingSync(Instant syncedAt, SyncTrigger trigger) {
+        if (syncedAt == null) {
+            return;
+        }
+        if (this.embeddingSyncedAt == null || syncedAt.isAfter(this.embeddingSyncedAt)) {
+            this.embeddingSyncedAt = syncedAt;
+            this.lastSyncTrigger = trigger;
+        }
     }
 }

@@ -1,8 +1,11 @@
 package com.isfam.domain.device.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.isfam.domain.device.entity.Device;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+
+import java.time.Instant;
 
 /** POST /devices · /devices/me/** · /model-info 의 요청·응답 */
 public final class DeviceDto {
@@ -78,6 +81,34 @@ public final class DeviceDto {
     }
 
     public record PushTokenResponse(Long deviceId, String pushToken) {
+    }
+
+    // ── 임베딩 동기화 상태 (Phase 7) ────────────────────────
+
+    /**
+     * {@code PUT /devices/me/sync-status}.
+     *
+     * <p><b>{@code synced_at} 은 반드시 GET /family/embeddings 응답의 값을 그대로</b> 보냅니다.
+     * 클라이언트가 자기 시계로 만들면 안 됩니다 — 폰 시각이 서버보다 조금만 앞서도
+     * 그 사이에 갱신된 임베딩이 다음 동기화에서 통째로 누락됩니다.
+     *
+     * <p>{@code synced_at} 을 {@link Instant} 로 받으면 형식이 틀렸을 때
+     * COMMON_001(400)이 나갑니다. 이 경우는 앱 버그라 그대로 드러나는 게 맞습니다.
+     */
+    public record SyncStatusRequest(
+            @NotNull(message = "synced_at 이 필요해요")
+            Instant syncedAt,
+
+            @NotBlank(message = "sync_trigger 가 필요해요")
+            String syncTrigger
+    ) {
+    }
+
+    public record SyncStatusResponse(
+            Long deviceId,
+            Instant embeddingSyncedAt,
+            Device.SyncTrigger syncTrigger
+    ) {
     }
 
     // ── 모델 정보 (비인증) ──────────────────────────────────
