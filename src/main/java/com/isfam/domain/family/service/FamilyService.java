@@ -6,7 +6,9 @@ import com.isfam.domain.auth.entity.User;
 import com.isfam.domain.auth.repository.UserRepository;
 import com.isfam.domain.family.dto.FamilyDto;
 import com.isfam.domain.family.entity.Family;
+import com.isfam.domain.family.entity.FamilyMemberAlias;
 import com.isfam.domain.family.entity.FamilyMembership;
+import com.isfam.domain.family.repository.FamilyMemberAliasRepository;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
 import com.isfam.domain.family.repository.FamilyRepository;
 import com.isfam.domain.notification.entity.Notification;
@@ -52,6 +54,7 @@ public class FamilyService {
 
     private final FamilyRepository familyRepository;
     private final FamilyMembershipRepository membershipRepository;
+    private final FamilyMemberAliasRepository aliasRepository;
     private final UserRepository userRepository;
     private final VoiceprintRepository voiceprintRepository;
     private final NotificationService notificationService;
@@ -154,6 +157,10 @@ public class FamilyService {
 
         family.softDelete(now);
         myMembership.remove();
+
+        // 공간이 사라지면 그 안의 별명도 근거를 잃습니다.
+        // flushAutomatically 로 위 두 변경이 먼저 반영된 뒤 삭제됩니다.
+        aliasRepository.deleteAllByFamilyId(family.getId());
     }
 
     // ── 나가기 / 내보내기 ───────────────────────────────────
@@ -199,6 +206,13 @@ public class FamilyService {
             target.remove();
         }
 
+        // ── 별명 정리 ───────────────────────────────────────
+        // 같은 공간 멤버가 아니게 되는 순간 보유 근거가 사라집니다. 양방향입니다 —
+        // 그 사람이 붙인 별명도, 그 사람에게 붙은 별명도 함께 지웁니다.
+        // membership row 와 달리 여기는 남길 이유가 없습니다(removed_user_ids 와 무관).
+        // 이 호출로 영속성 컨텍스트가 비워지므로 아래에서 target·myMembership 을 다시 만지지 않습니다.
+        aliasRepository.deleteAllByFamilyIdAndUserId(familyId, targetUserId);
+
         // ── 알림함 ──────────────────────────────────────────
         // 대상은 "남은 멤버"입니다. 나간 본인은 자기가 나간 걸 알고, 내보낸 owner 도
         // 자기가 누른 버튼이라 알림을 받을 이유가 없습니다.
@@ -221,6 +235,73 @@ public class FamilyService {
 
         log.debug("가족 구성 변경 — 동기화 대상 {}건, 알림 {}건 (familyId={})",
                 syncTargets.size(), notifyTargets.size(), familyId);
+    }
+
+    // ── 멤버 별명 ───────────────────────────────────────────
+
+    /**
+     * 내 화면에서만 보이는 별명을 지정하거나 해제합니다.
+     *
+     * <p>owner 권한을 보지 않습니다 — 남의 데이터를 바꾸는 게 아니라 내 화면의 라벨입니다.
+     * 대신 <b>대상이 같은 공간의 active 멤버</b>여야 합니다. 이게 없으면 아무 userId 나 넣어
+     * 임의의 사용자에게 라벨을 붙일 수 있게 됩니다.
+     *
+     * <p>본인 지정은 막습니다. 화면에 쓸 자리가 없고, 허용하면 "내가 나를 부르는 이름"이라는
+     * 의미 없는 상태가 생깁니다.
+     *
+     * <p>alias 가 null·공백이면 해제(row 삭제)입니다. <b>row 를 남기지 않는 이유</b>는
+     * GET /family 가 유일한 소비처라서입니다. 만약 나중에 GET /family/embeddings 에 별명을
+     * 싣게 되면 이 삭제를 <i>반드시</i> "alias = null 로 두고 row 유지"로 바꿔야 합니다 —
+     * 그쪽 since 증분은 GREATEST(updated_at) 로 판정하는데, row 가 사라지면 최댓값이
+     * 과거로 되돌아가 그 멤버가 영영 안 내려가고 폰에 옛 별명이 남습니다.
+     *
+     * <p>{@code saveAndFlush} 인 이유는 rename() 과 같습니다 — {@code @LastModifiedDate} 는
+     * flush 시점에 찍혀서, 그냥 반환하면 변경 <i>전</i> updated_at 이 나갑니다.
+     */
+    @Transactional
+    public FamilyDto.UpdateAliasResponse updateAlias(Long viewerUserId, Long targetUserId,
+                                                     String rawAlias) {
+        if (viewerUserId.equals(targetUserId)) {
+            throw new BusinessException(ErrorCode.COMMON_002);
+        }
+
+        FamilyMembership myMembership = findMyActiveMembership(viewerUserId);
+        Long familyId = myMembership.getFamilyId();
+
+        membershipRepository.findByFamilyIdAndUserIdAndStatus(familyId, targetUserId, ACTIVE)
+                .orElseThrow(() -> new BusinessException(ErrorCode.FAMILY_001));
+
+        String alias = normalizeAlias(rawAlias);
+
+        var existing = aliasRepository
+                .findByFamilyIdAndViewerUserIdAndTargetUserId(familyId, viewerUserId, targetUserId);
+
+        if (alias == null) {
+            existing.ifPresent(aliasRepository::delete);
+            return new FamilyDto.UpdateAliasResponse(targetUserId, null, clock.instant());
+        }
+
+        // 조회와 insert 사이에 같은 사용자의 두 번째 요청이 끼어들면
+        // uq_alias_family_viewer_target 이 잡습니다. 경합에서 진 쪽만 한 번 실패하고
+        // 앱이 재시도하면 update 경로로 붙으므로 별도 재시도 로직을 두지 않았습니다
+        // (Device 의 uq_devices_user_push_token 과 같은 판단입니다).
+        FamilyMemberAlias row = existing.orElseGet(
+                () -> FamilyMemberAlias.of(familyId, viewerUserId, targetUserId, alias));
+        row.rename(alias);
+
+        FamilyMemberAlias saved = aliasRepository.saveAndFlush(row);
+
+        return new FamilyDto.UpdateAliasResponse(
+                targetUserId, saved.getAlias(), saved.getUpdatedAt());
+    }
+
+    /** 앞뒤 공백을 털고, 남은 게 없으면 해제로 봅니다 */
+    private String normalizeAlias(String rawAlias) {
+        if (rawAlias == null) {
+            return null;
+        }
+        String trimmed = rawAlias.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     // ── 내부 ────────────────────────────────────────────────
@@ -259,8 +340,12 @@ public class FamilyService {
     }
 
     /**
-     * members[] 조립. 쿼리는 멤버십·유저·보이스프린트 3번으로 고정입니다.
-     * 멤버마다 조회하면 8명짜리 공간에서 17번이 나갑니다.
+     * members[] 조립. 쿼리는 멤버십·유저·보이스프린트·별명 <b>4번으로 고정</b>입니다.
+     * 멤버마다 조회하면 8명짜리 공간에서 25번이 나갑니다.
+     *
+     * <p>별명 조회에 {@code myUserId} 가 viewer 로 들어가는 게 이 메서드의 핵심 제약입니다.
+     * 이 조건이 빠지면 예외 하나 없이 전원의 별명이 응답에 실립니다 —
+     * 대상 본인에게 "누가 나를 뭐라고 부르는지"가 노출되는 형태라 테스트로 고정해 두세요.
      */
     private FamilyDto.FamilyResponse buildFamilyResponse(Family family, Long myUserId) {
         List<FamilyMembership> memberships =
@@ -280,12 +365,19 @@ public class FamilyService {
 
         Set<Long> registered = Set.copyOf(voiceprintRepository.findRegisteredUserIds(userIds));
 
+        // viewer = 응답을 받는 사람. 여기가 별명이 단방향으로 유지되는 유일한 지점입니다.
+        Map<Long, String> aliases = aliasRepository
+                .findByFamilyIdAndViewerUserId(family.getId(), myUserId).stream()
+                .collect(Collectors.toMap(
+                        FamilyMemberAlias::getTargetUserId, FamilyMemberAlias::getAlias));
+
         List<FamilyDto.Member> members = memberships.stream()
                 .map(membership -> {
                     User user = users.get(membership.getUserId());
                     return new FamilyDto.Member(
                             membership.getUserId(),
                             user == null ? null : user.getDisplayName(),
+                            aliases.get(membership.getUserId()),
                             membership.getMemberRole(),
                             registered.contains(membership.getUserId()),
                             membership.getJoinedAt());
