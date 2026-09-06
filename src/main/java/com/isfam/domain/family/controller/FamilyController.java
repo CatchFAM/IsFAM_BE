@@ -70,4 +70,21 @@ public class FamilyController {
                              @PathVariable("userId") Long targetUserId) {
         familyService.removeMember(currentUserId, targetUserId);
     }
+
+    /**
+     * 멤버 별명 지정 · 해제.
+     *
+     * <p>내 화면에서만 보이는 라벨이라 owner 권한이 필요 없습니다. active 멤버면 누구나
+     * 다른 active 멤버에게 붙일 수 있습니다.
+     *
+     * <p>alias 가 null 이거나 공백뿐이면 해제입니다 — 별도 DELETE 엔드포인트를 두지 않은 건
+     * 앱의 "입력란 비우고 저장" 흐름이 그대로 해제가 되기 때문입니다.
+     */
+    @PutMapping("/members/{userId}/alias")
+    public FamilyDto.UpdateAliasResponse updateAlias(
+            @CurrentUser Long currentUserId,
+            @PathVariable("userId") Long targetUserId,
+            @Valid @RequestBody FamilyDto.UpdateAliasRequest request) {
+        return familyService.updateAlias(currentUserId, targetUserId, request.alias());
+    }
 }

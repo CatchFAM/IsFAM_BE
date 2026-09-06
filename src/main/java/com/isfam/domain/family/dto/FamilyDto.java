@@ -29,6 +29,18 @@ public final class FamilyDto {
     ) {
     }
 
+    /**
+     * PUT /family/members/{userId}/alias
+     *
+     * <p>{@code @NotBlank} 가 없는 건 의도입니다 — null 이나 공백은 <b>해제</b>입니다.
+     * 앱에서 입력란을 비우고 저장하는 흐름이 그대로 해제가 됩니다.
+     */
+    public record UpdateAliasRequest(
+            @Size(max = 50, message = "별명은 50자를 넘을 수 없어요")
+            String alias
+    ) {
+    }
+
     // ── 응답 ────────────────────────────────────────────────
 
     /**
@@ -55,10 +67,15 @@ public final class FamilyDto {
      * <p>voiceprintRegistered 는 Phase 6 전까지 전원 false 입니다 —
      * voiceprints 에 INSERT 하는 경로가 아직 없기 때문입니다. 조회는 이미 붙어 있어서
      * POST /me/voiceprint 가 생기는 순간 별도 수정 없이 true 로 바뀝니다.
+     *
+     * <p>alias 는 <b>이 응답을 받는 사람이</b> 붙인 별명입니다. 지정 전이면 null 이고,
+     * 같은 공간의 다른 사람이 부르는 이름은 여기 들어오지 않습니다.
+     * 앱은 alias 와 displayName 을 함께 표시합니다 — 입력란에 "아빠", 우측에 "김상호".
      */
     public record Member(
             Long userId,
             String displayName,
+            String alias,
             FamilyMembership.Role memberRole,
             boolean voiceprintRegistered,
             Instant joinedAt
@@ -69,6 +86,19 @@ public final class FamilyDto {
     public record UpdateNameResponse(
             Long familyId,
             String name,
+            Instant updatedAt
+    ) {
+    }
+
+    /**
+     * PUT /family/members/{userId}/alias
+     *
+     * <p>userId 는 <b>별명이 붙은 대상</b>입니다(요청자가 아닙니다).
+     * 해제한 경우 alias 는 null 이고 updatedAt 은 해제 시각입니다.
+     */
+    public record UpdateAliasResponse(
+            Long userId,
+            String alias,
             Instant updatedAt
     ) {
     }
