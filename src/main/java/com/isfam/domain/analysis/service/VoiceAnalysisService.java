@@ -24,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -81,6 +82,13 @@ public class VoiceAnalysisService {
                 .findByIdAndUserId(request.spoofCheckId(), userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.COMMON_004,
                         "해당 분석 요청을 찾을 수 없어요"));
+
+        // 판정을 거부한 요청에는 점수가 없습니다. 이걸로 분석 결과를 만들면
+        // spoof_score 가 null 인 분석이 생기고, 앱 화면에서 근거 없는 판정이 됩니다.
+        if (spoofCheck.isRejected()) {
+            throw new BusinessException(ErrorCode.COMMON_002,
+                    "판정이 거부된 요청으로는 분석을 제출할 수 없어요");
+        }
 
         // 다른 통화의 판정을 이 통화에 붙이면 이력이 통째로 어긋납니다.
         // 앱 버그일 가능성이 높아 조용히 받아주지 않습니다.
@@ -174,10 +182,7 @@ public class VoiceAnalysisService {
                 .map(VoiceAnalysis::getSpoofCheckId)
                 .collect(Collectors.toSet());
 
-        Map<Long, Double> scores = spoofCheckIds.isEmpty()
-                ? Map.of()
-                : spoofCheckRepository.findByIdIn(spoofCheckIds).stream()
-                .collect(Collectors.toMap(SpoofCheck::getId, SpoofCheck::getSpoofScore));
+        Map<Long, Double> scores = loadScores(spoofCheckIds);
 
         return PageResponse.of(page, pageQuery,
                 analysis -> VoiceAnalysisDto.Item.of(
@@ -222,6 +227,24 @@ public class VoiceAnalysisService {
     }
 
     // ── 내부 ────────────────────────────────────────────────
+
+    /**
+     * {@code Collectors.toMap} 을 쓰지 않는 이유는 거부 row 의 {@code spoofScore} 가
+     * null 이기 때문입니다. null 값을 만나면 NPE 로 목록 조회가 통째로 실패합니다.
+     *
+     * <p>거부된 판정은 분석 제출 단계에서 막히므로 여기까지 올 일은 없지만,
+     * 과거 데이터나 직접 INSERT 로 들어오면 그때 터집니다.
+     */
+    private Map<Long, Double> loadScores(Set<Long> spoofCheckIds) {
+        if (spoofCheckIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<Long, Double> scores = new HashMap<>();
+        spoofCheckRepository.findByIdIn(spoofCheckIds)
+                .forEach(check -> scores.put(check.getId(), check.getSpoofScore()));
+        return scores;
+    }
 
     private VoiceAnalysis.FinalDecision parseDecision(String raw) {
         try {

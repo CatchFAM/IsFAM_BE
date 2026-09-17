@@ -20,7 +20,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Locale;
-import java.util.Set;
 
 /**
  * 통화 녹음 딥보이스 판정 (Phase 8).
@@ -30,22 +29,21 @@ import java.util.Set;
  * 나머지 설계가 아무리 정확해도 소용이 없습니다.
  *
  * <pre>
- *   ① 암호화 전송   → TLS (인프라 · isfam.fastapi.base-url 을 https 로)
- *   ② 접속기록      → spoof_checks row 저장
+ *   ① 암호화 전송   → TLS (AnalysisEndpointGuard 가 기동 시 검사)
+ *   ② 접속기록      → spoof_checks row 저장. 거부한 요청도 남깁니다
  *   ③ 즉시 파기      → tmpfs 수신 후 finally 에서 삭제 · purged_at 기록
- *   ④ 처리방침      → 문서 (9장 미완 항목)
+ *   ④ 처리방침      → 문서 (Phase 15)
  * </pre>
  *
  * <p><b>화자 비교를 절대 수행하지 않습니다.</b> 임베딩 추출도, 가족 대조도 없습니다.
  * 이 경계가 민감정보 해당 여부를 가릅니다 — 합성 여부 판별은 개인 식별이 아니라서
  * 상대방 동의 없이 가능하지만, 여기에 ECAPA 를 한 줄이라도 끼워 넣는 순간
- * 동의 불가능한 민감정보 처리가 됩니다(legal-compliance.md 1장·5장).
+ * 동의 불가능한 민감정보 처리가 됩니다.
  *
  * <p><b>{@code @Transactional} 을 클래스·메서드에 걸지 않은 건 의도적입니다.</b>
  * FastAPI 왕복(수백 ms ~ 수 초)이 DB 트랜잭션 안에 들어가면 커넥션이 그 시간만큼
- * 점유됩니다. 통화가 몰리는 시간대에 그런 요청이 쌓이면 커넥션 풀이 마르고,
- * 분석과 무관한 API 까지 같이 멈춥니다. 여기서 필요한 쓰기는 마지막 INSERT 한 건뿐이라
- * {@code save()} 자체 트랜잭션으로 충분합니다.
+ * 점유됩니다. 여기서 필요한 쓰기는 마지막 INSERT 한 건뿐이라 {@code save()} 자체
+ * 트랜잭션으로 충분합니다.
  */
 @Slf4j
 @Service
@@ -53,13 +51,19 @@ import java.util.Set;
 public class SpoofCheckService {
 
     /**
-     * FastAPI 가 받는 형식. 명세상 앱은 wav 로 보내지만, 분석 서버가 mp3·m4a 도
-     * 처리하므로 굳이 좁히지 않았습니다. <b>서버가 16kHz mono 변환을 하므로
-     * 앱이 리샘플링할 필요는 없습니다</b> — 다만 30초 상한과 음질 게이트는 앱 책임입니다.
+     * 앱은 음질 통과 구간 최대 30초를 보냅니다. 35초는 인코딩 오차를 감안한 상한입니다.
+     * 이 값을 넘으면 판정하지 않습니다.
      */
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of("wav", "mp3", "m4a");
+    private static final double MAX_DURATION_SECONDS = 35.0;
 
-    private static final String DEFAULT_EXTENSION = "wav";
+    /** 30초 · 16kHz · mono · 16bit ≈ 960KB. 상한은 1.5MB */
+    private static final long MAX_AUDIO_BYTES = 1_572_864L;
+
+    /**
+     * <b>wav 만 받습니다.</b> mp3·m4a 는 헤더만으로 길이를 구할 수 없어
+     * 사전 거부(P-20)가 불가능합니다. 상한을 서버가 강제하려면 형식을 좁혀야 합니다.
+     */
+    private static final String ALLOWED_EXTENSION = "wav";
 
     private final SpoofCheckRepository spoofCheckRepository;
     private final CallEventRepository callEventRepository;
@@ -75,6 +79,9 @@ public class SpoofCheckService {
      * 남의 통화 이벤트에 음성을 올릴 수 있으면, 그건 남의 이름으로 접속기록을
      * 남기는 것과 같습니다.
      *
+     * <p><b>거부할 때도 파기와 기록이 먼저입니다.</b> 순서가 뒤집히면 "상한을 넘는
+     * 음성이 들어왔다"는 사실이 기록에 남지 않아, 통제를 만든 의미가 없어집니다.
+     *
      * @param clientIp 접속기록 항목. 컨트롤러가 프록시 헤더까지 고려해 뽑아 넘깁니다
      */
     public SpoofCheckDto.Response check(Long userId, Long deviceId, Long callEventId,
@@ -82,21 +89,60 @@ public class SpoofCheckService {
 
         requireMyDevice(userId, deviceId);
         CallEvent callEvent = requireMyCallEvent(userId, callEventId);
+        requireWav(audioFile);
 
-        String extension = resolveExtension(audioFile);
         Instant requestedAt = clock.instant();
 
-        AntiSpoofingResponse result;
-        Instant purgedAt = null;
         AudioTempStorage.TempAudio audio = null;
+        AntiSpoofingResponse result = null;
+        SpoofCheck.RejectedReason rejection = null;
+        Double duration = null;
+        Instant purgedAt;
 
         try {
-            audio = audioTempStorage.receive(audioFile, extension);
-            result = antiSpoofingClient.detect(audio);
+            audio = audioTempStorage.receive(audioFile, ALLOWED_EXTENSION);
+
+            if (audio.sizeBytes() > MAX_AUDIO_BYTES) {
+                rejection = SpoofCheck.RejectedReason.SIZE_EXCEEDED;
+            } else {
+                AudioTempStorage.Probe probe = audioTempStorage.probe(audio);
+                duration = probe.durationSeconds();
+
+                if (!probe.valid()) {
+                    rejection = SpoofCheck.RejectedReason.INVALID_WAV_HEADER;
+                } else if (probe.durationSeconds() > MAX_DURATION_SECONDS) {
+                    rejection = SpoofCheck.RejectedReason.DURATION_EXCEEDED;
+                } else {
+                    result = antiSpoofingClient.detect(audio);
+
+                    // 사후 확인 — 헤더가 실제 데이터와 다를 수 있습니다
+                    Double reported = result.audioQuality() == null
+                            ? null : result.audioQuality().durationSeconds();
+                    if (reported != null) {
+                        duration = reported;
+                        if (reported > MAX_DURATION_SECONDS) {
+                            rejection = SpoofCheck.RejectedReason.DURATION_EXCEEDED;
+                        }
+                    }
+                }
+            }
         } finally {
-            // 예외가 나도 원본은 반드시 사라집니다. legal-compliance.md 4장 ③ 의
-            // 파이썬 예시와 같은 구조입니다.
+            // 예외가 나도 원본은 반드시 사라집니다.
             purgedAt = audioTempStorage.purge(audio);
+        }
+
+        Integer audioBytes = toIntBytes(audio == null ? 0 : audio.sizeBytes());
+
+        if (rejection != null) {
+            SpoofCheck saved = spoofCheckRepository.save(SpoofCheck.rejected(
+                    userId, callEvent.getId(), deviceId, rejection,
+                    duration, audioBytes, clientIp, requestedAt, purgedAt));
+
+            warnIfNotPurged(purgedAt, saved.getId(), callEventId);
+            log.info("딥보이스 판정 거부 — spoofCheckId={}, reason={}, duration={}, bytes={}",
+                    saved.getId(), rejection, duration, audioBytes);
+
+            throw new BusinessException(ErrorCode.VOICE_002, rejection.toJson());
         }
 
         SpoofCheck saved = spoofCheckRepository.save(SpoofCheck.of(
@@ -109,17 +155,13 @@ public class SpoofCheckService {
                 SpoofCheck.AnalysisStatus.from(result.analysisStatus()),
                 result.analyzedSegments(),
                 StringUtils.hasText(result.modelName()) ? result.modelName() : "unknown",
-                result.audioQuality() == null ? null : result.audioQuality().durationSeconds(),
-                toIntBytes(audio == null ? 0 : audio.sizeBytes()),
+                duration,
+                audioBytes,
                 clientIp,
                 requestedAt,
                 purgedAt));
 
-        if (purgedAt == null) {
-            // 여기 걸리면 tmpfs 에 통화 음성이 남아 있을 수 있습니다. 즉시 확인해야 합니다.
-            log.error("!!! purged_at 이 비어 있습니다 — spoofCheckId={}, callEventId={}",
-                    saved.getId(), callEventId);
-        }
+        warnIfNotPurged(purgedAt, saved.getId(), callEventId);
 
         log.debug("딥보이스 판정 — spoofCheckId={}, status={}, isSpoofed={}, segments={}",
                 saved.getId(), saved.getAnalysisStatus(), saved.isSpoofed(),
@@ -131,8 +173,7 @@ public class SpoofCheckService {
     // ── 내부 ────────────────────────────────────────────────
 
     /**
-     * 본인 단말인지 확인합니다. 없는 id 든 남의 단말이든 같은 DEVICE_002(401)입니다 —
-     * 다른 서비스와 같은 규칙입니다.
+     * 본인 단말인지 확인합니다. 없는 id 든 남의 단말이든 같은 DEVICE_002(401)입니다.
      *
      * <p>여기서 단말까지 보는 이유는 이 요청이 통화 음성을 실어 오기 때문입니다.
      * 어느 기기에서 무엇이 올라왔는지가 {@code spoof_checks.device_id} 로 남아야
@@ -151,34 +192,37 @@ public class SpoofCheckService {
     }
 
     /**
-     * 확장자 판정.
+     * 확장자 검사.
      *
-     * <p>FastAPI 가 파일명으로 형식을 검사하므로(415 조건) 확장자를 살려서 넘겨야 합니다.
-     * 파일명이 없거나 확장자가 없으면 wav 로 가정합니다 — 앱은 wav 만 보내게 돼 있고,
-     * 여기서 400 을 내면 앱 버그가 아닌 경우에도 분석이 통째로 막힙니다.
-     * 실제로 형식이 틀렸다면 FastAPI 가 415 로 잡아주고, 그건 COMMON_007 로 전달됩니다.
+     * <p>이 단계에서 거부하면 파일을 받기 전이라 {@code spoof_checks} row 를 만들지
+     * 않습니다. 헤더 불량({@code INVALID_WAV_HEADER})과 다른 지점입니다 —
+     * 그쪽은 wav 라고 주장하며 들어온 파일이라 기록이 필요합니다.
      */
-    private String resolveExtension(MultipartFile audioFile) {
+    private void requireWav(MultipartFile audioFile) {
         if (audioFile == null || audioFile.isEmpty()) {
             throw new BusinessException(ErrorCode.COMMON_001, "audio_file 이 필요해요");
         }
 
         String filename = audioFile.getOriginalFilename();
-        if (StringUtils.hasText(filename)) {
-            String extension = StringUtils.getFilenameExtension(filename);
-            if (extension != null) {
-                String normalized = extension.toLowerCase(Locale.ROOT);
-                if (ALLOWED_EXTENSIONS.contains(normalized)) {
-                    return normalized;
-                }
-                throw new BusinessException(ErrorCode.COMMON_007,
-                        "wav, mp3, m4a 만 분석할 수 있어요");
-            }
+        if (!StringUtils.hasText(filename)) {
+            return;
         }
-        return DEFAULT_EXTENSION;
+
+        String extension = StringUtils.getFilenameExtension(filename);
+        if (extension != null && !ALLOWED_EXTENSION.equals(extension.toLowerCase(Locale.ROOT))) {
+            throw new BusinessException(ErrorCode.COMMON_007, "wav 만 분석할 수 있어요");
+        }
     }
 
-    /** ERD 의 audio_bytes 가 int 입니다. 업로드 상한이 5MB 라 넘칠 일은 없지만 방어합니다 */
+    private void warnIfNotPurged(Instant purgedAt, Long spoofCheckId, Long callEventId) {
+        if (purgedAt == null) {
+            // 여기 걸리면 tmpfs 에 통화 음성이 남아 있을 수 있습니다. 즉시 확인해야 합니다.
+            log.error("!!! purged_at 이 비어 있습니다 — spoofCheckId={}, callEventId={}",
+                    spoofCheckId, callEventId);
+        }
+    }
+
+    /** ERD 의 audio_bytes 가 int 입니다. 상한이 1.5MB 라 넘칠 일은 없지만 방어합니다 */
     private Integer toIntBytes(long size) {
         return size > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) size;
     }
