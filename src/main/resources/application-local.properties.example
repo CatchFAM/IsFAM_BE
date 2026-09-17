@@ -1,5 +1,3 @@
 spring.datasource.username=postgres
 spring.datasource.password=본인_postgres_비번
-
-# head -c 32 /dev/urandom | base64
 isfam.crypto.embedding-key=

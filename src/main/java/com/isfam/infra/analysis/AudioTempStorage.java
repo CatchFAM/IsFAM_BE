@@ -10,9 +10,13 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Clock;
@@ -49,6 +53,10 @@ public class AudioTempStorage {
     private static final Set<PosixFilePermission> FILE_PERMISSIONS =
             PosixFilePermissions.fromString("rw-------");
 
+    private static final int RIFF_HEADER_BYTES = 12;
+    private static final int CHUNK_HEADER_BYTES = 8;
+    private static final int FMT_CHUNK_MIN_BYTES = 16;
+
     private final Path root;
     private final Clock clock;
 
@@ -73,10 +81,8 @@ public class AudioTempStorage {
     /**
      * 업로드된 파일을 tmpfs 에 씁니다.
      *
-     * <p>확장자를 유지하는 이유는 FastAPI 가 파일명으로 형식을 검사하기 때문입니다
-     * (415 응답 조건). 파일명 자체는 UUID 로 갈아치웁니다 — 클라이언트가 보낸 이름에는
-     * 통화 상대 번호나 시각이 들어 있을 수 있고, 그건 식별정보라 서버 파일시스템에
-     * 남길 이유가 없습니다.
+     * <p>파일명은 UUID 로 갈아치웁니다 — 클라이언트가 보낸 이름에는 통화 상대 번호나
+     * 시각이 들어 있을 수 있고, 그건 식별정보라 서버 파일시스템에 남길 이유가 없습니다.
      */
     public TempAudio receive(MultipartFile file, String extension) {
         Path path = root.resolve("spoof-%s.%s".formatted(UUID.randomUUID(), extension));
@@ -93,6 +99,77 @@ public class AudioTempStorage {
         }
 
         return new TempAudio(path, file.getSize());
+    }
+
+    /**
+     * WAV 헤더를 읽어 길이를 계산합니다. 분석 서버로 보내기 <b>전에</b> 거부하기 위한 것입니다(P-20).
+     *
+     * <p>기존에는 길이를 FastAPI 응답의 {@code duration_seconds} 로 사후에 알았습니다.
+     * 그 시점에는 이미 통화 음성 전체를 받아 분석까지 마친 뒤라, "30초만 받는다"는
+     * 주장의 근거가 되지 못했습니다.
+     *
+     * <p>헤더만 훑으므로 오디오 데이터 자체는 읽지 않습니다.
+     *
+     * @return 파싱 실패 시 {@link Probe#invalid()}
+     */
+    public Probe probe(TempAudio audio) {
+        if (audio == null) {
+            return Probe.invalid();
+        }
+
+        try (SeekableByteChannel channel = Files.newByteChannel(audio.path(), StandardOpenOption.READ)) {
+            ByteBuffer header = read(channel, RIFF_HEADER_BYTES);
+            if (header == null
+                    || !"RIFF".equals(tag(header, 0))
+                    || !"WAVE".equals(tag(header, 8))) {
+                return Probe.invalid();
+            }
+
+            long byteRate = 0;
+            long dataBytes = -1;
+            long position = RIFF_HEADER_BYTES;
+            long fileSize = channel.size();
+
+            while (position + CHUNK_HEADER_BYTES <= fileSize) {
+                channel.position(position);
+                ByteBuffer chunk = read(channel, CHUNK_HEADER_BYTES);
+                if (chunk == null) {
+                    break;
+                }
+
+                String id = tag(chunk, 0);
+                long size = Integer.toUnsignedLong(chunk.getInt(4));
+                long body = position + CHUNK_HEADER_BYTES;
+
+                if ("fmt ".equals(id) && size >= FMT_CHUNK_MIN_BYTES) {
+                    channel.position(body);
+                    ByteBuffer fmt = read(channel, FMT_CHUNK_MIN_BYTES);
+                    if (fmt == null) {
+                        return Probe.invalid();
+                    }
+                    byteRate = Integer.toUnsignedLong(fmt.getInt(8));
+                } else if ("data".equals(id)) {
+                    // 스트리밍 파일은 크기를 0 이나 0xFFFFFFFF 로 적어둡니다. 실제 파일 크기로 대체합니다.
+                    dataBytes = (size == 0 || size == 0xFFFFFFFFL) ? fileSize - body : size;
+                }
+
+                if (byteRate > 0 && dataBytes >= 0) {
+                    break;
+                }
+
+                // 청크는 짝수 바이트 경계에 정렬됩니다
+                position = body + size + (size % 2);
+            }
+
+            if (byteRate <= 0 || dataBytes < 0) {
+                return Probe.invalid();
+            }
+            return Probe.of((double) dataBytes / byteRate);
+
+        } catch (IOException e) {
+            log.error("WAV 헤더를 읽지 못했습니다: {}", audio.path(), e);
+            return Probe.invalid();
+        }
     }
 
     /**
@@ -113,6 +190,27 @@ public class AudioTempStorage {
             log.error("!!! 통화 음성 원본 파기 실패 — 즉시 확인 필요: {}", audio.path(), e);
             return null;
         }
+    }
+
+    // ── 내부 ────────────────────────────────────────────────
+
+    private ByteBuffer read(SeekableByteChannel channel, int length) throws IOException {
+        ByteBuffer buffer = ByteBuffer.allocate(length).order(ByteOrder.LITTLE_ENDIAN);
+        while (buffer.hasRemaining()) {
+            if (channel.read(buffer) < 0) {
+                return null;
+            }
+        }
+        return buffer;
+    }
+
+    private String tag(ByteBuffer buffer, int offset) {
+        return new String(new char[]{
+                (char) (buffer.get(offset) & 0xFF),
+                (char) (buffer.get(offset + 1) & 0xFF),
+                (char) (buffer.get(offset + 2) & 0xFF),
+                (char) (buffer.get(offset + 3) & 0xFF)
+        });
     }
 
     private void purgeQuietly(Path path) {
@@ -139,5 +237,22 @@ public class AudioTempStorage {
      *                  "무엇이 얼마나 들어왔는가"가 접속기록의 항목입니다
      */
     public record TempAudio(Path path, long sizeBytes) {
+    }
+
+    /**
+     * WAV 헤더 파싱 결과.
+     *
+     * @param valid           RIFF/WAVE 헤더를 읽었는지
+     * @param durationSeconds 유효할 때만 값이 있습니다
+     */
+    public record Probe(boolean valid, Double durationSeconds) {
+
+        static Probe invalid() {
+            return new Probe(false, null);
+        }
+
+        static Probe of(double durationSeconds) {
+            return new Probe(true, durationSeconds);
+        }
     }
 }

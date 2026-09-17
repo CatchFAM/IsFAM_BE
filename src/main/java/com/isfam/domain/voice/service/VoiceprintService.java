@@ -209,7 +209,9 @@ public class VoiceprintService {
         try {
             return EmbeddingCodec.decodeBase64(base64);
         } catch (IllegalArgumentException e) {
-            log.debug("임베딩 디코딩 실패: {}", e.getMessage());
+            // e.getMessage() 를 넣지 마세요 — Base64 디코더가 실패 지점의 원문 조각을
+            // 메시지에 담습니다. 임베딩은 생체인식 특징정보라 조각도 로그에 남기지 않습니다.
+            log.debug("임베딩 디코딩 실패 — 형식 오류");
             throw new BusinessException(ErrorCode.VOICE_001,
                     "음성 데이터 형식이 올바르지 않아요. 다시 녹음해 주세요");
         }

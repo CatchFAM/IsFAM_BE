@@ -48,3 +48,12 @@ dependencies {
 tasks.named('test') {
 	useJUnitPlatform()
 }
+
+tasks.withType(JavaCompile).configureEach {
+	options.encoding = 'UTF-8'
+}
+
+// 실행 중 콘솔 출력 인코딩. 없으면 로그의 한글이 "?듯솕 ?뚯꽦" 으로 나옵니다.
+tasks.named('bootRun') {
+	jvmArgs = ['-Dfile.encoding=UTF-8']
+}

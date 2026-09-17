@@ -35,6 +35,15 @@ public enum ErrorCode {
     INVITE_003(HttpStatus.UNPROCESSABLE_ENTITY, "음성 공유 동의가 필요해요"),
 
     VOICE_001(HttpStatus.UNPROCESSABLE_ENTITY, "음질이 부족해요. 조용한 곳에서 다시 녹음해 주세요"),
+    /**
+     * 통화 음성이 상한(35초·1.5MB)을 넘거나 WAV 헤더가 깨진 경우.
+     *
+     * <p><b>재시도 금지 오류입니다.</b> 같은 파일을 다시 올려도 동일하게 거부되므로
+     * 앱은 해당 call_event 를 {@code PUT /call-events} 로 failed 처리하고 종료해야 합니다.
+     * VOICE_001(재녹음하면 통과 가능)과 성격이 달라 코드를 나눴습니다.
+     */
+    VOICE_002(HttpStatus.UNPROCESSABLE_ENTITY, "분석할 수 없는 음성이에요"),
+
     DEVICE_001(HttpStatus.UNPROCESSABLE_ENTITY, "통화 자동녹음을 지원하지 않는 기기예요"),
     /**
      * [확장] X-Device-Id 누락·형식 오류·타인 단말.
