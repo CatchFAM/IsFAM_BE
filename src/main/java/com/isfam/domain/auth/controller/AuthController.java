@@ -4,11 +4,13 @@ import com.isfam.domain.auth.dto.AuthDto;
 import com.isfam.domain.auth.dto.PhoneVerificationDto;
 import com.isfam.domain.auth.service.AuthService;
 import com.isfam.domain.auth.service.PhoneVerificationService;
+import com.isfam.domain.auth.service.WithdrawalService;
 import com.isfam.common.security.AuthPrincipal;
 import com.isfam.common.security.CurrentUser;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -17,7 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-/** /auth/** — 번호 인증 · 가입 · 로그인 · 세션 · 내 정보 */
+/** /auth/** — 번호 인증 · 가입 · 로그인 · 세션 · 내 정보 · 탈퇴 */
 @RestController
 @RequestMapping("/auth")
 @RequiredArgsConstructor
@@ -25,6 +27,7 @@ public class AuthController {
 
     private final PhoneVerificationService phoneVerificationService;
     private final AuthService authService;
+    private final WithdrawalService withdrawalService;
 
     // ── 번호 인증 (비인증) ──────────────────────────────────
 
@@ -87,7 +90,7 @@ public class AuthController {
      * 닉네임 수정.
      *
      * <p>경로는 명세대로 {@code PUT /auth/me} 입니다. 하위 경로로 빼두면 앱이 명세대로
-     * 짰을 때 405 가 납니다. 회원 탈퇴({@code DELETE /auth/me}, Phase 9)도 같은 경로에
+     * 짰을 때 405 가 납니다. 회원 탈퇴({@code DELETE /auth/me})도 같은 경로에
      * 메서드만 달리해 붙습니다.
      */
     @PutMapping("/me")
@@ -95,5 +98,32 @@ public class AuthController {
             @CurrentUser Long userId,
             @Valid @RequestBody AuthDto.DisplayNameRequest request) {
         return authService.updateDisplayName(userId, request.displayName());
+    }
+
+    /**
+     * 회원 탈퇴.
+     *
+     * <p><b>되돌릴 수 없습니다.</b> 음성 등록 정보(voiceprints·voiceprint_samples)는
+     * 물리 삭제되므로 같은 번호로 재가입해도 목소리는 다시 등록해야 합니다.
+     * 법 제21조가 생체정보의 soft delete 를 허용하지 않습니다.
+     *
+     * <p>본문에 {@code password} 가 필요합니다 — 이유는 {@code WithdrawRequest} 참고.
+     *
+     * <p><b>응답은 204 입니다.</b> 성공했는데 본문을 기다리면 앱이 멈추므로 명세대로
+     * 비워 보냅니다. 앱은 204 를 받으면 로컬 데이터(토큰·임베딩·통화 기록)를 전량
+     * 삭제하고 로그인 화면으로 돌아가야 합니다.
+     *
+     * <p>에러는 둘입니다.
+     * <ul>
+     *   <li>401 AUTH_008 — 비밀번호 불일치</li>
+     *   <li>409 FAMILY_005 — owner 인 공간이 있음. 전원 내보내고
+     *       {@code DELETE /family} 로 공간을 지운 뒤 재시도</li>
+     * </ul>
+     */
+    @DeleteMapping("/me")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void withdraw(@CurrentUser Long userId,
+                         @Valid @RequestBody AuthDto.WithdrawRequest request) {
+        withdrawalService.withdraw(userId, request.password());
     }
 }

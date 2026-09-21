@@ -149,4 +149,23 @@ public final class AuthDto {
             Instant updatedAt
     ) {
     }
+
+    // ── 회원 탈퇴 ───────────────────────────────────────────
+
+    /**
+     * {@code DELETE /auth/me} 요청.
+     *
+     * <p><b>비밀번호를 요구합니다.</b> access_token 만으로도 본인이긴 하지만, 탈퇴는
+     * 생체정보를 포함한 계정 전체를 되돌릴 수 없게 지우는 동작입니다. 폰을 잠깐 빌려주거나
+     * 잠금 해제된 채로 두었을 때 한 번의 탭으로 실행되면 안 됩니다.
+     *
+     * <p>비밀번호 정책 검증({@code @Pattern})은 걸지 않습니다. 정책이 바뀌기 전에 가입한
+     * 계정이 형식 때문에 탈퇴하지 못하는 상황을 만들지 않기 위해서입니다 —
+     * 어차피 맞는지 여부는 BCrypt 대조로 판정합니다.
+     */
+    public record WithdrawRequest(
+            @NotBlank(message = "비밀번호를 입력해 주세요")
+            String password
+    ) {
+    }
 }
