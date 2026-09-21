@@ -13,7 +13,8 @@ import org.springframework.stereotype.Component;
  * "문제가 없었다"를 구별하는 근거가 됩니다.
  *
  * <pre>
- *   GET /actuator/health   →  503 {"status":"DOWN"}   ← purged_at IS NULL 이 0 이 아님
+ *   GET /actuator/health   →  503 {"status":"DOWN"}
+ *       ← purged_at IS NULL 또는 remote_purged = false 가 0 이 아님
  * </pre>
  *
  * <p><b>세부 정보는 내보내지 않습니다.</b>
@@ -59,6 +60,7 @@ public class PurgeHealthIndicator implements HealthIndicator {
 
         return builder
                 .withDetail("unpurged", snapshot.unpurged())
+                .withDetail("remoteUnpurged", snapshot.remoteUnpurged())
                 .withDetail("checkedAt", snapshot.checkedAt().toString())
                 .build();
     }

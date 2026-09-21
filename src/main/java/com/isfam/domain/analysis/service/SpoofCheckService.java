@@ -32,6 +32,7 @@ import java.util.Locale;
  *   ① 암호화 전송   → TLS (AnalysisEndpointGuard 가 기동 시 검사)
  *   ② 접속기록      → spoof_checks row 저장. 거부한 요청도 남깁니다
  *   ③ 즉시 파기      → tmpfs 수신 후 finally 에서 삭제 · purged_at 기록
+ *                     + 분석 서버 임시 파일은 remote_purged 로 (Phase 11 · P-23)
  *   ④ 처리방침      → 문서 (Phase 15)
  * </pre>
  *
@@ -44,6 +45,12 @@ import java.util.Locale;
  * FastAPI 왕복(수백 ms ~ 수 초)이 DB 트랜잭션 안에 들어가면 커넥션이 그 시간만큼
  * 점유됩니다. 여기서 필요한 쓰기는 마지막 INSERT 한 건뿐이라 {@code save()} 자체
  * 트랜잭션으로 충분합니다.
+ *
+ * <p><b>여기서 알람을 쏘지 않습니다.</b> 파기 실패는 로그로만 남기고, 알람은
+ * {@code PurgeMonitor} 가 5분 주기로 DB 를 세어 보냅니다(P-21). 요청 경로에
+ * 외부 HTTP 호출(Slack)을 하나 더 붙이면 사용자 응답이 그만큼 늦어지고,
+ * 무엇보다 <b>프로세스가 죽어서 파기가 안 된 경우에는 이 코드가 애초에 실행되지
+ * 않습니다</b> — 감시는 요청 밖에 있어야 합니다.
  */
 @Slf4j
 @Service
@@ -133,10 +140,18 @@ public class SpoofCheckService {
 
         Integer audioBytes = toIntBytes(audio == null ? 0 : audio.sizeBytes());
 
+        /*
+         * 분석 서버까지 간 요청만 원격 파기 값을 가집니다(P-23).
+         * 사전 거부(헤더 불량·상한 초과)는 보낸 적이 없으므로 null 이고,
+         * 그건 파기 실패가 아니라 "해당 없음"입니다.
+         */
+        Boolean remotePurged = result == null ? null : result.purged();
+        warnIfRemoteNotPurged(result, callEventId);
+
         if (rejection != null) {
             SpoofCheck saved = spoofCheckRepository.save(SpoofCheck.rejected(
                     userId, callEvent.getId(), deviceId, rejection,
-                    duration, audioBytes, clientIp, requestedAt, purgedAt));
+                    duration, audioBytes, clientIp, requestedAt, purgedAt, remotePurged));
 
             warnIfNotPurged(purgedAt, saved.getId(), callEventId);
             log.info("딥보이스 판정 거부 — spoofCheckId={}, reason={}, duration={}, bytes={}",
@@ -159,7 +174,8 @@ public class SpoofCheckService {
                 audioBytes,
                 clientIp,
                 requestedAt,
-                purgedAt));
+                purgedAt,
+                remotePurged));
 
         warnIfNotPurged(purgedAt, saved.getId(), callEventId);
 
@@ -217,8 +233,27 @@ public class SpoofCheckService {
     private void warnIfNotPurged(Instant purgedAt, Long spoofCheckId, Long callEventId) {
         if (purgedAt == null) {
             // 여기 걸리면 tmpfs 에 통화 음성이 남아 있을 수 있습니다. 즉시 확인해야 합니다.
+            // 5분 뒤 PurgeMonitor 가 집계해 알람 + 헬스체크 DOWN 으로 올립니다.
             log.error("!!! purged_at 이 비어 있습니다 — spoofCheckId={}, callEventId={}",
                     spoofCheckId, callEventId);
+        }
+    }
+
+    /**
+     * 분석 서버 파기 미확인 경고 (P-23).
+     *
+     * <p>{@code null} 은 아직 플래그를 안 보내는 FastAPI 버전입니다 — 배포 과도기에는
+     * 정상이라 WARN 으로, 명시적 {@code false} 는 파기 실패라 ERROR 로 구분합니다.
+     */
+    private void warnIfRemoteNotPurged(AntiSpoofingResponse result, Long callEventId) {
+        if (result == null || !result.isRemotePurgeUnconfirmed()) {
+            return;
+        }
+        if (result.purged() == null) {
+            log.warn("분석 서버 응답에 purged 플래그가 없습니다 — callEventId={} "
+                    + "(FastAPI P-23 미배포 버전으로 보입니다)", callEventId);
+        } else {
+            log.error("!!! 분석 서버가 임시 파일을 파기하지 못했습니다 — callEventId={}", callEventId);
         }
     }
 

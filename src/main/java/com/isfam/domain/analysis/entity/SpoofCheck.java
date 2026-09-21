@@ -24,11 +24,20 @@ import java.time.Instant;
  * 상대방 동의 문제가 아니었습니다. 통화 음성을 서버로 받는 순간 이 row 가 없으면
  * 같은 지적을 받습니다.
  *
- * <p><b>{@code purged_at} 이 파기 증빙입니다.</b> null 인 row 가 있으면 그건
- * "원본을 지웠는지 알 수 없다"는 뜻이고, 운영에서 감시해야 할 유일한 지표입니다.
+ * <p><b>파기 증빙이 두 컬럼입니다.</b>
+ * <ul>
+ *   <li>{@code purged_at} — 우리 서버(tmpfs) 원본을 지운 시각</li>
+ *   <li>{@code remote_purged} — 분석 서버(FastAPI) 임시 파일 파기 여부 (P-23)</li>
+ * </ul>
+ * {@code purged_at} 만으로는 Java 쪽만 증명됩니다. FastAPI 의 {@code UploadFile} 은
+ * 1MB 를 넘으면 디스크로 스풀되고 30초 오디오가 정확히 그 구간이라, 그쪽에도 통화
+ * 음성이 남습니다. 두 값이 함께 있어야 "어디에도 안 남는다"고 말할 수 있습니다.
  * <pre>
- *   select count(*) from spoof_checks where purged_at is null;  -- 항상 0 이어야 합니다
+ *   select count(*) from spoof_checks where purged_at is null;        -- 항상 0
+ *   select count(*) from spoof_checks where remote_purged = false;    -- 항상 0
  * </pre>
+ * 두 쿼리는 {@code PurgeMonitor} 가 5분마다 돌리고, 0 이 아니면 알람 +
+ * {@code /actuator/health} DOWN 입니다(P-21).
  *
  * <p><b>판정을 거부한 요청도 row 를 남깁니다</b>({@link AnalysisStatus#REJECTED}).
  * 상한을 넘는 음성이 들어와도 그 사실이 기록에 남지 않으면 "30초만 받는다"는
@@ -162,11 +171,29 @@ public class SpoofCheck {
     @Column(name = "purged_at")
     private Instant purgedAt;
 
+    /**
+     * 분석 서버(FastAPI) 임시 파일 파기 여부 (P-23).
+     *
+     * <p><b>세 가지 상태를 구별합니다.</b>
+     * <ul>
+     *   <li>{@code true}  — 분석 서버가 지웠다고 응답</li>
+     *   <li>{@code false} — 지우지 못했다고 응답. <b>파기 실패이며 알람 대상</b></li>
+     *   <li>{@code null}  — 분석 서버에 보내지 않았거나(사전 거부),
+     *       아직 이 필드를 안 보내는 버전. 실패로 세지 않습니다</li>
+     * </ul>
+     * null 과 false 를 합치면 배포 과도기의 공백이 파기 실패로 집계돼
+     * 진짜 실패가 묻힙니다. 대신 FastAPI 배포가 끝난 뒤에도 null 이 계속 나오면
+     * 그건 그것대로 확인해야 합니다.
+     */
+    @Column(name = "remote_purged")
+    private Boolean remotePurged;
+
     private SpoofCheck(Long userId, Long callEventId, Long deviceId, Double spoofScore,
                        Boolean spoofed, Double threshold, AnalysisStatus analysisStatus,
                        RejectedReason rejectedReason, Integer analyzedSegments,
                        String modelVersion, Double durationSeconds, Integer audioBytes,
-                       String clientIp, Instant requestedAt, Instant purgedAt) {
+                       String clientIp, Instant requestedAt, Instant purgedAt,
+                       Boolean remotePurged) {
         this.userId = userId;
         this.callEventId = callEventId;
         this.deviceId = deviceId;
@@ -182,23 +209,24 @@ public class SpoofCheck {
         this.clientIp = clientIp;
         this.requestedAt = requestedAt;
         this.purgedAt = purgedAt;
+        this.remotePurged = remotePurged;
     }
 
     /**
      * 판정이 끝난 요청.
      *
-     * <p><b>{@code purgedAt} 을 생성자에서 받습니다.</b> 나중에 채우게 하면
-     * "저장은 됐는데 파기 기록이 빠진" row 가 생길 수 있습니다. 원본 파기가 끝난 뒤에야
-     * 이 객체를 만들 수 있도록 강제하는 게 이 시그니처의 목적입니다.
+     * <p><b>{@code purgedAt} 과 {@code remotePurged} 를 생성자에서 받습니다.</b> 나중에
+     * 채우게 하면 "저장은 됐는데 파기 기록이 빠진" row 가 생길 수 있습니다. 양쪽 파기가
+     * 끝난 뒤에야 이 객체를 만들 수 있도록 강제하는 게 이 시그니처의 목적입니다.
      */
     public static SpoofCheck of(Long userId, Long callEventId, Long deviceId, Double spoofScore,
                                 Boolean spoofed, Double threshold, AnalysisStatus analysisStatus,
                                 Integer analyzedSegments, String modelVersion,
                                 Double durationSeconds, Integer audioBytes, String clientIp,
-                                Instant requestedAt, Instant purgedAt) {
+                                Instant requestedAt, Instant purgedAt, Boolean remotePurged) {
         return new SpoofCheck(userId, callEventId, deviceId, spoofScore, spoofed, threshold,
                 analysisStatus, null, analyzedSegments, modelVersion, durationSeconds,
-                audioBytes, clientIp, requestedAt, purgedAt);
+                audioBytes, clientIp, requestedAt, purgedAt, remotePurged);
     }
 
     /**
@@ -206,14 +234,19 @@ public class SpoofCheck {
      *
      * <p>판정값 4종({@code spoofScore}·{@code spoofed}·{@code threshold}·{@code modelVersion})은
      * null 입니다. 거부했는데 점수가 있는 상태가 생기지 않도록 DB CHECK 제약으로도 막습니다.
+     *
+     * <p>{@code remotePurged} 는 <b>거부 시점에 따라 달라집니다.</b> 헤더 파싱 단계에서
+     * 막았으면 분석 서버에 보낸 적이 없으니 null, FastAPI 응답의 길이가 상한을 넘어
+     * 거부했으면 이미 보낸 뒤라 그쪽 파기 여부를 기록해야 합니다.
      */
     public static SpoofCheck rejected(Long userId, Long callEventId, Long deviceId,
                                       RejectedReason reason, Double durationSeconds,
                                       Integer audioBytes, String clientIp,
-                                      Instant requestedAt, Instant purgedAt) {
+                                      Instant requestedAt, Instant purgedAt,
+                                      Boolean remotePurged) {
         return new SpoofCheck(userId, callEventId, deviceId, null, null, null,
                 AnalysisStatus.REJECTED, reason, null, null, durationSeconds,
-                audioBytes, clientIp, requestedAt, purgedAt);
+                audioBytes, clientIp, requestedAt, purgedAt, remotePurged);
     }
 
     /**

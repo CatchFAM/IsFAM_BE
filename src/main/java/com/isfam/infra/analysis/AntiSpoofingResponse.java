@@ -9,7 +9,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * <pre>
  * { "analysis_status": "complete", "is_spoofed": false, "spoof_score": 0.2817,
  *   "threshold": 0.5, "predicted_label": "real", "model_name": "...",
- *   "analyzed_segments": 2, "audio_quality": { ... } }
+ *   "analyzed_segments": 2, "purged": true, "audio_quality": { ... } }
  * </pre>
  *
  * <p><b>모든 필드에 {@code @JsonProperty} 로 이름을 명시한 건 필수입니다.</b>
@@ -70,12 +70,39 @@ public record AntiSpoofingResponse(
         Double segmentSeconds,
 
         @JsonProperty("audio_quality")
-        AudioQuality audioQuality
+        AudioQuality audioQuality,
+
+        /*
+         * 분석 서버가 자기 임시 파일을 지웠는지 (P-23 · S3-④).
+         *
+         * spoof_checks.purged_at 은 Java 쪽 tmpfs 파일만 증명합니다. FastAPI 의
+         * UploadFile 은 1MB 를 넘으면 디스크로 스풀되는데 30초 오디오가 정확히 그
+         * 구간이라, 분석 서버에도 통화 음성이 남습니다.
+         *
+         * false 거나 null 이면 그쪽 파기를 증명할 수 없다는 뜻이고,
+         * spoof_checks.remote_purged 로 그대로 남아 PurgeMonitor 가 5분마다 셉니다.
+         *
+         * null 은 "아직 이 필드를 안 보내는 버전"입니다. false 와 구별해 저장합니다 —
+         * 배포 순서 때문에 생기는 공백을 파기 실패로 세면 진짜 실패가 묻힙니다.
+         * 대신 FastAPI 배포가 끝난 뒤에도 null 이 계속 나오면 그건 확인해야 합니다.
+         */
+        @JsonProperty("purged")
+        Boolean purged
 ) {
 
     /** 이 응답으로 판정 row 를 만들 수 있는지. 핵심 값이 하나라도 비면 신뢰할 수 없습니다 */
     public boolean isUsable() {
         return spoofScore != null && threshold != null && isSpoofed != null;
+    }
+
+    /**
+     * 분석 서버 파기가 <b>확인되지 않은</b> 상태.
+     *
+     * <p>null(구버전)도 여기 포함됩니다 — 로그 경고용입니다.
+     * DB 에는 null 과 false 를 구별해 넣습니다.
+     */
+    public boolean isRemotePurgeUnconfirmed() {
+        return !Boolean.TRUE.equals(purged);
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
