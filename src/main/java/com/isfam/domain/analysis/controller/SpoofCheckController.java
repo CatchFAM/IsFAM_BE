@@ -2,12 +2,12 @@ package com.isfam.domain.analysis.controller;
 
 import com.isfam.common.security.CurrentUser;
 import com.isfam.common.security.DeviceId;
+import com.isfam.common.web.ClientIpResolver;
 import com.isfam.domain.analysis.dto.SpoofCheckDto;
 import com.isfam.domain.analysis.service.SpoofCheckService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
-import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -23,13 +23,15 @@ import org.springframework.web.multipart.MultipartFile;
  *
  * <p>앱은 <b>음질 통과 구간 최대 30초</b>만 보냅니다. 통화 전체를 올리지 않습니다.
  * 서버가 16kHz mono 로 변환하므로 앱이 리샘플링할 필요는 없습니다.
+ *
+ * <p><b>IP 해석은 Phase 12 에서 {@link ClientIpResolver} 로 옮겼습니다</b>(P-16).
+ * {@code embedding_access_logs} · {@code voiceprint_access_logs} 도 같은 "접속지" 항목을
+ * 요구해서, 여기 private 메서드로 두면 세 벌이 됩니다. 프록시 설정이 바뀔 때 한 벌만
+ * 고쳐지는 사고를 막으려고 공통으로 뺐습니다 — 동작은 그대로입니다.
  */
 @RestController
 @RequiredArgsConstructor
 public class SpoofCheckController {
-
-    private static final String HEADER_FORWARDED_FOR = "X-Forwarded-For";
-    private static final String HEADER_REAL_IP = "X-Real-IP";
 
     private final SpoofCheckService spoofCheckService;
 
@@ -50,38 +52,6 @@ public class SpoofCheckController {
             HttpServletRequest request) {
 
         return spoofCheckService.check(userId, deviceId, callEventId, audioFile,
-                resolveClientIp(request));
-    }
-
-    /**
-     * 접속기록에 남길 클라이언트 IP.
-     *
-     * <p>{@code getRemoteAddr()} 만 쓰면 리버스 프록시·로드밸런서 뒤에서는
-     * 전부 같은 내부 IP 가 찍혀 기록이 무의미해집니다. 프록시 헤더를 먼저 봅니다.
-     *
-     * <p><b>다만 이 헤더들은 클라이언트가 위조할 수 있습니다.</b> 신뢰할 수 있는 프록시
-     * 뒤에서만 의미가 있고, 프록시가 헤더를 덮어쓰도록 설정돼 있어야 합니다.
-     * 인증·인가 판단에는 절대 쓰지 마세요 — 기록 용도입니다.
-     *
-     * <p>{@code X-Forwarded-For} 는 {@code client, proxy1, proxy2} 형태라 첫 항목만 씁니다.
-     * 45자로 자르는 건 IPv6 최대 길이(39) + 여유이고, 컬럼 길이와 맞춥니다.
-     */
-    private String resolveClientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader(HEADER_FORWARDED_FOR);
-        if (StringUtils.hasText(forwarded)) {
-            return truncate(forwarded.split(",")[0].trim());
-        }
-        String realIp = request.getHeader(HEADER_REAL_IP);
-        if (StringUtils.hasText(realIp)) {
-            return truncate(realIp.trim());
-        }
-        return truncate(request.getRemoteAddr());
-    }
-
-    private String truncate(String value) {
-        if (!StringUtils.hasText(value)) {
-            return null;
-        }
-        return value.length() <= 45 ? value : value.substring(0, 45);
+                ClientIpResolver.resolve(request));
     }
 }
