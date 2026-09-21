@@ -4,7 +4,6 @@ import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -13,6 +12,7 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.SeekableByteChannel;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -35,6 +35,11 @@ import java.util.UUID;
  *   <li>파기 완료 후 {@code purged_at} 기록</li>
  * </ul>
  *
+ * <p><b>{@code finally} 만으로는 부족합니다</b>(S3-e). 프로세스가 OOM 이나 SIGKILL 로
+ * 죽으면 그 블록은 실행되지 않고 tmpfs 에 통화 음성이 그대로 남습니다. 그래서 Phase 11
+ * 에서 {@link #purgeAll()}(기동 시 전량 청소)과 {@link #purgeOlderThan(Instant)}
+ * (10분 주기 고아 파일 스위퍼)을 추가했습니다. 호출은 {@link AudioTempSweeper} 가 합니다.
+ *
  * <p><b>운영에서 {@code isfam.audio.tmp-dir} 는 tmpfs 여야 합니다</b>
  * (예: {@code /dev/shm/isfam}). 일반 디스크로 두면 파일을 지워도 블록이 남아
  * "저장하지 않는다"는 처리방침과 어긋납니다.
@@ -53,6 +58,28 @@ public class AudioTempStorage {
     private static final Set<PosixFilePermission> FILE_PERMISSIONS =
             PosixFilePermissions.fromString("rw-------");
 
+    /** 우리가 만든 분석용 원본의 접두사 */
+    private static final String FILE_PREFIX = "spoof-";
+
+    /**
+     * 스위퍼가 훑는 패턴. <b>디렉터리를 통째로 비우지 않습니다.</b>
+     *
+     * <p>설정을 잘못 건드려 {@code tmp-dir} 이 {@code /tmp} 나 {@code /dev/shm} 자체를
+     * 가리키게 되면 전량 삭제는 남의 파일까지 지웁니다. 패턴으로 좁히면 오설정의
+     * 피해가 우리 파일로 한정됩니다.
+     *
+     * <ul>
+     *   <li>{@code spoof-*} — 이 클래스가 만든 분석용 원본</li>
+     *   <li>{@code upload_*} — <b>톰캣 멀티파트 스풀 파일</b>.
+     *       {@code spring.servlet.multipart.location} 을 같은 tmpfs 로,
+     *       {@code file-size-threshold} 를 0 으로 잡아 통화 음성이 기본 임시
+     *       디렉터리(일반 디스크)로 새지 않게 했습니다(인프라 설계 계획).
+     *       정상 종료 시에는 톰캣이 요청 끝에 스스로 지우지만, 프로세스가 죽으면
+     *       남습니다 — 우리 파일만 훑으면 이쪽을 놓칩니다</li>
+     * </ul>
+     */
+    private static final String[] SWEEP_GLOBS = {FILE_PREFIX + "*", "upload_*"};
+
     private static final int RIFF_HEADER_BYTES = 12;
     private static final int CHUNK_HEADER_BYTES = 8;
     private static final int FMT_CHUNK_MIN_BYTES = 16;
@@ -60,8 +87,8 @@ public class AudioTempStorage {
     private final Path root;
     private final Clock clock;
 
-    public AudioTempStorage(@Value("${isfam.audio.tmp-dir}") String tmpDir, Clock clock) {
-        this.root = Path.of(tmpDir);
+    public AudioTempStorage(AudioTempProperties properties, Clock clock) {
+        this.root = Path.of(properties.tmpDir());
         this.clock = clock;
     }
 
@@ -78,6 +105,11 @@ public class AudioTempStorage {
         }
     }
 
+    /** 스위퍼가 로그에 쓸 디렉터리 경로 */
+    public Path root() {
+        return root;
+    }
+
     /**
      * 업로드된 파일을 tmpfs 에 씁니다.
      *
@@ -85,7 +117,7 @@ public class AudioTempStorage {
      * 시각이 들어 있을 수 있고, 그건 식별정보라 서버 파일시스템에 남길 이유가 없습니다.
      */
     public TempAudio receive(MultipartFile file, String extension) {
-        Path path = root.resolve("spoof-%s.%s".formatted(UUID.randomUUID(), extension));
+        Path path = root.resolve(FILE_PREFIX + UUID.randomUUID() + "." + extension);
 
         try (InputStream in = file.getInputStream()) {
             Files.copy(in, path, StandardCopyOption.REPLACE_EXISTING);
@@ -192,7 +224,74 @@ public class AudioTempStorage {
         }
     }
 
+    /**
+     * 남아 있는 파일을 전부 지웁니다. <b>기동 시점 전용</b>(P-22 · S3-③).
+     *
+     * <p>기동 시점에 이 디렉터리에 파일이 있다는 것은 이전 프로세스가 {@code finally} 를
+     * 실행하지 못하고 죽었다는 뜻입니다. 나이를 볼 필요가 없습니다 — 이 JVM 이 만든
+     * 파일은 아직 하나도 없으니 전부 고아입니다.
+     *
+     * <p><b>웹 서버가 요청을 받기 전에 호출해야 합니다.</b> 트래픽이 들어온 뒤에 부르면
+     * 방금 업로드된 파일을 지울 수 있습니다.
+     *
+     * <p><b>같은 tmpfs 를 두 JVM 이 공유하면 안 됩니다.</b> 한쪽 기동이 다른 쪽의
+     * 분석 중인 파일을 지웁니다. 호스트당 애플리케이션 1개가 전제입니다.
+     */
+    public Sweep purgeAll() {
+        return sweep(null);
+    }
+
+    /**
+     * {@code cutoff} 보다 오래된 파일을 지웁니다. 10분 주기 스위퍼용(P-22).
+     *
+     * <p>살아 있는 동안의 안전망입니다 — 분석 스레드가 {@code finally} 를 못 타고
+     * 사라지는 경우에도 파일이 영원히 남지 않게 합니다.
+     *
+     * @param cutoff 이 시각보다 <b>수정 시각이 이른</b> 파일만 지웁니다.
+     *               분석 중인 파일을 지우지 않도록 호출부가 여유를 둡니다
+     */
+    public Sweep purgeOlderThan(Instant cutoff) {
+        return sweep(cutoff);
+    }
+
     // ── 내부 ────────────────────────────────────────────────
+
+    /**
+     * @param cutoff null 이면 전량. <b>예외를 던지지 않습니다</b> —
+     *               스위퍼가 죽으면 안전망이 사라집니다
+     */
+    private Sweep sweep(Instant cutoff) {
+        int deleted = 0;
+        int failed = 0;
+
+        for (String glob : SWEEP_GLOBS) {
+            try (DirectoryStream<Path> files = Files.newDirectoryStream(root, glob)) {
+                for (Path path : files) {
+                    try {
+                        if (!Files.isRegularFile(path)) {
+                            continue;
+                        }
+                        if (cutoff != null
+                                && !Files.getLastModifiedTime(path).toInstant().isBefore(cutoff)) {
+                            continue;
+                        }
+                        if (Files.deleteIfExists(path)) {
+                            deleted++;
+                        }
+                    } catch (IOException e) {
+                        failed++;
+                        log.error("!!! tmpfs 잔여 파일을 지우지 못했습니다: {}", path, e);
+                    }
+                }
+            } catch (IOException e) {
+                log.error("!!! tmpfs 디렉터리를 읽지 못했습니다: {} (패턴 {})",
+                        root.toAbsolutePath(), glob, e);
+                failed++;
+            }
+        }
+
+        return new Sweep(deleted, failed);
+    }
 
     private ByteBuffer read(SeekableByteChannel channel, int length) throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(length).order(ByteOrder.LITTLE_ENDIAN);
@@ -237,6 +336,27 @@ public class AudioTempStorage {
      *                  "무엇이 얼마나 들어왔는가"가 접속기록의 항목입니다
      */
     public record TempAudio(Path path, long sizeBytes) {
+    }
+
+    /**
+     * 청소 결과.
+     *
+     * <p><b>{@code deleted} 도 0 이어야 정상입니다.</b> 지웠다는 건 원래 남아 있었다는
+     * 뜻이고, 그건 {@code finally} 가 실행되지 않은 요청이 있었다는 증거입니다.
+     *
+     * @param deleted 지운 파일 수
+     * @param failed  지우지 못한 파일 수. <b>이쪽이 더 심각합니다</b> —
+     *                통화 음성이 tmpfs 에 계속 남아 있다는 뜻입니다
+     */
+    public record Sweep(int deleted, int failed) {
+
+        public boolean isClean() {
+            return deleted == 0 && failed == 0;
+        }
+
+        public int total() {
+            return deleted + failed;
+        }
     }
 
     /**

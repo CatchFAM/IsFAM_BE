@@ -23,9 +23,13 @@ import org.springframework.web.client.RestClient;
  * {@code spring.jackson.property-naming-strategy=SNAKE_CASE} 가 적용되지 않는다는 뜻입니다.
  * 그래서 {@link AntiSpoofingResponse} 는 모든 필드에 {@code @JsonProperty} 로
  * 이름을 명시했습니다. 이 두 결정은 한 쌍이라 한쪽만 되돌리면 조용히 깨집니다.
+ *
+ * <p>{@link AudioTempProperties} 도 여기서 등록합니다(Phase 11) — tmpfs 경로와 고아 파일
+ * 기준은 분석 왕복 시간({@code read-timeout})과 함께 봐야 의미가 있는 값이라 같은 설정
+ * 클래스에 묶어 둡니다. {@link AudioTempSweeper} 가 기동 시 둘을 비교해 검증합니다.
  */
 @Configuration
-@EnableConfigurationProperties(AntiSpoofingProperties.class)
+@EnableConfigurationProperties({AntiSpoofingProperties.class, AudioTempProperties.class})
 public class AntiSpoofingConfig {
 
     @Bean
