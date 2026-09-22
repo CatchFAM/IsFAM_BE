@@ -5,6 +5,8 @@ import com.isfam.common.crypto.EmbeddingCodec;
 import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
 import com.isfam.common.model.ModelVersionPolicy;
+import com.isfam.domain.audit.entity.VoiceprintAccessLog;
+import com.isfam.domain.audit.service.VoiceprintAccessLogger;
 import com.isfam.domain.auth.entity.User;
 import com.isfam.domain.auth.repository.UserRepository;
 import com.isfam.domain.family.entity.FamilyMembership;
@@ -51,6 +53,10 @@ import java.util.Set;
  * <p>등록에 성공하면 같은 공간 멤버 전원에게 동기화 푸시가 나갑니다 — 가족 폰이
  * {@code GET /family/embeddings} 를 다시 불러 갱신된 평균을 받아가야 하기 때문입니다.
  * 푸시는 {@link FamilySyncEvent} 발행으로 끝내고 실제 발송은 커밋 후에 일어납니다.
+ *
+ * <p><b>Phase 12 — 생체정보가 들어오고 나가는 두 지점을 기록합니다</b>(P-28).
+ * 등록은 수집이고, 모델 계열 변경으로 샘플을 버리는 것은 파기입니다. 둘 다
+ * {@code voiceprint_access_logs} 에 남습니다.
  */
 @Slf4j
 @Service
@@ -64,6 +70,7 @@ public class VoiceprintService {
     private final FamilyMembershipRepository membershipRepository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
+    private final VoiceprintAccessLogger accessLogger;
     private final EmbeddingCipher embeddingCipher;
     private final ModelVersionPolicy modelVersionPolicy;
     private final ApplicationEventPublisher eventPublisher;
@@ -81,9 +88,13 @@ public class VoiceprintService {
      *
      * <p><b>공간 소속 여부와 무관하게 등록됩니다</b>(명세 [정책]). 혼자 쓰는 사용자도
      * 나중에 초대를 받으면 재등록 없이 바로 공유됩니다.
+     *
+     * @param clientIp 접속기록의 "접속지". 컨트롤러가 {@code ClientIpResolver} 로 뽑아 넘깁니다
      */
     @Transactional
-    public VoiceprintDto.RegisterResponse register(Long userId, VoiceprintDto.RegisterRequest request) {
+    public VoiceprintDto.RegisterResponse register(
+            Long userId, VoiceprintDto.RegisterRequest request, String clientIp) {
+
         Instant now = clock.instant();
 
         modelVersionPolicy.requireSupported(request.embeddingModelVersion());
@@ -99,14 +110,25 @@ public class VoiceprintService {
         // 등록은 성공하고 탐지만 조용히 망가집니다.
         // deleteAllByUserId 는 영속성 컨텍스트를 비우므로(clearAutomatically) 이 시점 이후에
         // 엔티티를 다시 읽습니다 — 위에서 읽어둔 인스턴스는 준영속이 됩니다.
-        boolean modelChanged = voiceprintRepository.findByUserId(userId)
+        //
+        // Phase 12 — 기존 버전 문자열을 미리 꺼내 둡니다. 파기 기록에 "무슨 모델로 만든
+        // 생체정보를 버렸는가"가 들어가야 하는데, 지운 뒤에는 알 방법이 없습니다.
+        String existingVersion = voiceprintRepository.findByUserId(userId)
                 .map(Voiceprint::getEmbeddingModelVersion)
-                .filter(existing -> !modelVersionPolicy.sameFamily(
-                        existing, request.embeddingModelVersion()))
-                .isPresent();
+                .orElse(null);
+
+        boolean modelChanged = existingVersion != null
+                && !modelVersionPolicy.sameFamily(existingVersion, request.embeddingModelVersion());
 
         if (modelChanged) {
             int removed = sampleRepository.deleteAllByUserId(userId);
+
+            // 버리는 것도 생체정보 파기입니다(법 제21조). voiceprints row 는 아래에서
+            // 새 평균으로 갱신되므로 사라지지 않습니다 — affectedVoiceprints 가 0 인 이유.
+            accessLogger.recordDestroy(userId, userId,
+                    VoiceprintAccessLog.Reason.MODEL_CHANGED,
+                    removed, 0, existingVersion, clientIp, now);
+
             log.info("모델 계열 변경으로 기존 샘플 {}건 폐기 (userId={}, newVersion={})",
                     removed, userId, request.embeddingModelVersion());
         }
@@ -155,6 +177,13 @@ public class VoiceprintService {
         // GET /family/embeddings 의 since 판정이 이 값을 기준으로 돌아갑니다(Phase 7).
         voiceprintRepository.saveAndFlush(voiceprint);
 
+        // ── 수집 기록 (P-28) ───────────────────────────────
+        // 저장이 확정된 뒤에 남깁니다. 앞에서 남기면 아래가 실패했을 때
+        // "수집했다"는 기록만 남고 실제 데이터는 없는 상태가 기록에 박힙니다.
+        // (같은 트랜잭션이라 실제로는 함께 롤백되지만, 순서를 맞춰두면 읽기도 쉽습니다)
+        accessLogger.recordRegister(userId, request.sentenceId(), samples.size(),
+                voiceprint.getEmbeddingModelVersion(), clientIp, now);
+
         publishSync(userId, now);
 
         log.debug("음성 등록 — userId={}, sentenceId={}, quality={}, sampleCount={}",
@@ -174,6 +203,11 @@ public class VoiceprintService {
      *
      * <p>미등록이면 404 가 아니라 {@code voiceprint_registered=false} 인 200 입니다.
      * "아직 등록 안 한 상태"는 정상 상태이고, 앱은 이 응답으로 온보딩 화면을 그립니다.
+     *
+     * <p><b>기록을 남기지 않습니다.</b> 이 응답에는 임베딩이 실리지 않습니다 —
+     * 등록 여부·샘플 수·문장별 품질뿐입니다. 생체정보가 서버 밖으로 나가는 경로가 아니라
+     * {@code voiceprint_access_logs} 의 대상이 아니고, 온보딩 화면이 뜰 때마다 불리는
+     * API 라 기록하면 접속기록이 의미 없는 row 로 덮입니다.
      */
     @Transactional(readOnly = true)
     public VoiceprintDto.StatusResponse getStatus(Long userId) {

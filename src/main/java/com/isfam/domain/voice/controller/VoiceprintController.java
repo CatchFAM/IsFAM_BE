@@ -1,8 +1,10 @@
 package com.isfam.domain.voice.controller;
 
 import com.isfam.common.security.CurrentUser;
+import com.isfam.common.web.ClientIpResolver;
 import com.isfam.domain.voice.dto.VoiceprintDto;
 import com.isfam.domain.voice.service.VoiceprintService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -23,6 +25,10 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>둘 다 인증이 필요하고 본인 것만 다룹니다. 남의 임베딩을 조회할 수 있는 API 는
  * {@code GET /family/embeddings} 뿐이며, 그건 제3자 제공 동의를 받은 가족 멤버로 한정됩니다.
+ *
+ * <p><b>Phase 12 — 등록에 {@code HttpServletRequest} 가 붙었습니다</b>(P-28).
+ * 생체정보 수집 기록의 "접속지"(고시 제8조) 때문입니다. 조회에는 붙이지 않았습니다 —
+ * 그 응답에는 임베딩이 실리지 않아 기록 대상이 아닙니다.
  */
 @RestController
 @RequestMapping("/me/voiceprint")
@@ -40,8 +46,10 @@ public class VoiceprintController {
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public VoiceprintDto.RegisterResponse register(
             @CurrentUser Long userId,
-            @Valid @RequestBody VoiceprintDto.RegisterRequest request) {
-        return voiceprintService.register(userId, request);
+            @Valid @RequestBody VoiceprintDto.RegisterRequest request,
+            HttpServletRequest httpRequest) {
+        return voiceprintService.register(userId, request,
+                ClientIpResolver.resolve(httpRequest));
     }
 
     /** 미등록이면 404 가 아니라 {@code voiceprint_registered=false} 인 200 입니다 */
