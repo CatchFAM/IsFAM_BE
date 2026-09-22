@@ -7,6 +7,8 @@ import com.isfam.domain.auth.service.PhoneVerificationService;
 import com.isfam.domain.auth.service.WithdrawalService;
 import com.isfam.common.security.AuthPrincipal;
 import com.isfam.common.security.CurrentUser;
+import com.isfam.common.web.ClientIpResolver;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -119,11 +121,16 @@ public class AuthController {
      *   <li>409 FAMILY_005 — owner 인 공간이 있음. 전원 내보내고
      *       {@code DELETE /family} 로 공간을 지운 뒤 재시도</li>
      * </ul>
+     *
+     * <p>{@code HttpServletRequest} 는 파기 기록의 "접속지"(고시 제8조) 때문입니다 —
+     * 생체정보를 지운 행위의 접속기록이 {@code voiceprint_access_logs} 에 남습니다(P-28).
      */
     @DeleteMapping("/me")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void withdraw(@CurrentUser Long userId,
-                         @Valid @RequestBody AuthDto.WithdrawRequest request) {
-        withdrawalService.withdraw(userId, request.password());
+                         @Valid @RequestBody AuthDto.WithdrawRequest request,
+                         HttpServletRequest httpRequest) {
+        withdrawalService.withdraw(userId, request.password(),
+                ClientIpResolver.resolve(httpRequest));
     }
 }

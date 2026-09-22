@@ -5,6 +5,8 @@ import com.isfam.common.error.ErrorCode;
 import com.isfam.common.util.HashUtil;
 import com.isfam.domain.analysis.repository.CallEventRepository;
 import com.isfam.domain.analysis.repository.VoiceAnalysisRepository;
+import com.isfam.domain.audit.entity.VoiceprintAccessLog;
+import com.isfam.domain.audit.service.VoiceprintAccessLogger;
 import com.isfam.domain.auth.entity.User;
 import com.isfam.domain.auth.repository.RefreshTokenRepository;
 import com.isfam.domain.auth.repository.UserRepository;
@@ -13,6 +15,7 @@ import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMemberAliasRepository;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
 import com.isfam.domain.notification.repository.NotificationRepository;
+import com.isfam.domain.voice.entity.Voiceprint;
 import com.isfam.domain.voice.repository.VoiceprintRepository;
 import com.isfam.domain.voice.repository.VoiceprintSampleRepository;
 import com.isfam.infra.push.event.FamilySyncEvent;
@@ -57,6 +60,10 @@ import java.util.Set;
  *
  * <p><b>{@code user_agreements} 도 남깁니다.</b> 분쟁 대비 보관입니다(erd.md).
  * "동의를 받았다"는 사실은 탈퇴 후에도 증명해야 할 수 있습니다.
+ *
+ * <p><b>Phase 12 — ③의 파기를 {@code voiceprint_access_logs} 에 남깁니다</b>(P-28).
+ * 이게 없으면 탈퇴 후 남는 증거가 "row 가 없다"뿐인데, 그건 <b>처음부터 없었던 것과
+ * 구분되지 않습니다.</b>
  */
 @Slf4j
 @Service
@@ -75,6 +82,7 @@ public class WithdrawalService {
     private final CallEventRepository callEventRepository;
     private final NotificationRepository notificationRepository;
     private final DeviceRepository deviceRepository;
+    private final VoiceprintAccessLogger voiceprintAccessLogger;
     private final PasswordEncoder passwordEncoder;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
@@ -91,9 +99,10 @@ public class WithdrawalService {
      * </ul>
      *
      * @param rawPassword 본인 확인용. 틀리면 AUTH_008
+     * @param clientIp    파기 기록의 "접속지"(고시 제8조). 컨트롤러가 뽑아 넘깁니다
      */
     @Transactional
-    public void withdraw(Long userId, String rawPassword) {
+    public void withdraw(Long userId, String rawPassword, String clientIp) {
         Instant now = clock.instant();
 
         // ── ① 비밀번호 검증 → owner 공간 확인 ──────────────
@@ -123,8 +132,22 @@ public class WithdrawalService {
 
         // ── ③ 생체정보 물리 삭제 ───────────────────────────
         // soft delete 가 허용되지 않습니다(법 제21조). 순서상 가장 먼저 지웁니다.
+        //
+        // 모델 버전을 먼저 꺼냅니다 — 파기 기록에 "무슨 모델로 만든 생체정보를 버렸는가"가
+        // 들어가야 하는데, 지운 뒤에는 알 방법이 없습니다.
+        String modelVersion = voiceprintRepository.findByUserId(userId)
+                .map(Voiceprint::getEmbeddingModelVersion)
+                .orElse(null);
+
         int voiceprints = voiceprintRepository.deleteAllByUserId(userId);
         int samples = sampleRepository.deleteAllByUserId(userId);
+
+        // 지운 직후에 남깁니다. 기록이 실패하면 삭제도 함께 롤백됩니다(MANDATORY 전파) —
+        // 지워졌는데 기록이 없는 상태는 복구할 방법이 없고, 롤백은 재시도하면 됩니다.
+        // 등록한 적 없는 사용자면 둘 다 0 이라 기록하지 않습니다.
+        voiceprintAccessLogger.recordDestroy(userId, userId,
+                VoiceprintAccessLog.Reason.WITHDRAWAL,
+                samples, voiceprints, modelVersion, clientIp, now);
 
         // ── ④ 멤버십 → left ────────────────────────────────
         // row 를 지우지 않습니다. 남은 가족 폰에 removed_user_ids 로 알려야 하므로
