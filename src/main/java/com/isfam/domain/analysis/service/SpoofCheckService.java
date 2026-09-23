@@ -2,6 +2,7 @@ package com.isfam.domain.analysis.service;
 
 import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
+import com.isfam.common.log.MdcContext;
 import com.isfam.domain.analysis.dto.SpoofCheckDto;
 import com.isfam.domain.analysis.entity.CallEvent;
 import com.isfam.domain.analysis.entity.SpoofCheck;
@@ -51,6 +52,10 @@ import java.util.Locale;
  * 외부 HTTP 호출(Slack)을 하나 더 붙이면 사용자 응답이 그만큼 늦어지고,
  * 무엇보다 <b>프로세스가 죽어서 파기가 안 된 경우에는 이 코드가 애초에 실행되지
  * 않습니다</b> — 감시는 요청 밖에 있어야 합니다.
+ *
+ * <p><b>Phase 12 — 저장하는 row 에 {@code trace_id} 가 붙습니다.</b> 같은 요청이
+ * 다른 기록 테이블에 남긴 row 와 이어집니다. {@code operation}(고시 제8조의 "수행업무")은
+ * 어느 팩토리를 쓰느냐로 정해지므로 여기서 따로 넘기지 않습니다.
  */
 @Slf4j
 @Service
@@ -99,6 +104,10 @@ public class SpoofCheckService {
         requireWav(audioFile);
 
         Instant requestedAt = clock.instant();
+
+        // 요청 시작 시점에 확정합니다. 파기·기록 도중 스레드가 바뀔 일은 없지만,
+        // 값을 한 번만 읽어두면 같은 요청에서 만든 row 들이 확실히 같은 값을 갖습니다.
+        String traceId = resolveTraceId();
 
         AudioTempStorage.TempAudio audio = null;
         AntiSpoofingResponse result = null;
@@ -150,7 +159,7 @@ public class SpoofCheckService {
 
         if (rejection != null) {
             SpoofCheck saved = spoofCheckRepository.save(SpoofCheck.rejected(
-                    userId, callEvent.getId(), deviceId, rejection,
+                    traceId, userId, callEvent.getId(), deviceId, rejection,
                     duration, audioBytes, clientIp, requestedAt, purgedAt, remotePurged));
 
             warnIfNotPurged(purgedAt, saved.getId(), callEventId);
@@ -161,6 +170,7 @@ public class SpoofCheckService {
         }
 
         SpoofCheck saved = spoofCheckRepository.save(SpoofCheck.of(
+                traceId,
                 userId,
                 callEvent.getId(),
                 deviceId,
@@ -187,6 +197,18 @@ public class SpoofCheckService {
     }
 
     // ── 내부 ────────────────────────────────────────────────
+
+    /**
+     * MDC 에 trace id 가 없으면 새로 만듭니다.
+     *
+     * <p>HTTP 요청이면 {@code TraceIdFilter} 가 넣어 두었으므로 정상 흐름에서는
+     * 항상 있습니다. 없다고 요청을 실패시키지는 않습니다 — 이어 붙일 상대가 없을 뿐
+     * 접속기록 자체는 남아야 합니다.
+     */
+    private String resolveTraceId() {
+        String traceId = MdcContext.traceId();
+        return traceId != null ? traceId : MdcContext.newTraceId();
+    }
 
     /**
      * 본인 단말인지 확인합니다. 없는 id 든 남의 단말이든 같은 DEVICE_002(401)입니다.
