@@ -6,6 +6,7 @@ import com.isfam.common.util.HashUtil;
 import com.isfam.domain.analysis.repository.CallEventRepository;
 import com.isfam.domain.analysis.repository.VoiceAnalysisRepository;
 import com.isfam.domain.audit.entity.VoiceprintAccessLog;
+import com.isfam.domain.audit.service.DataDeletionLogger;
 import com.isfam.domain.audit.service.VoiceprintAccessLogger;
 import com.isfam.domain.auth.entity.User;
 import com.isfam.domain.auth.repository.RefreshTokenRepository;
@@ -29,6 +30,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -61,9 +64,13 @@ import java.util.Set;
  * <p><b>{@code user_agreements} 도 남깁니다.</b> 분쟁 대비 보관입니다(erd.md).
  * "동의를 받았다"는 사실은 탈퇴 후에도 증명해야 할 수 있습니다.
  *
- * <p><b>Phase 12 — ③의 파기를 {@code voiceprint_access_logs} 에 남깁니다</b>(P-28).
- * 이게 없으면 탈퇴 후 남는 증거가 "row 가 없다"뿐인데, 그건 <b>처음부터 없었던 것과
- * 구분되지 않습니다.</b>
+ * <p><b>Phase 12 — 기록이 둘 붙었습니다.</b>
+ * <ul>
+ *   <li>③의 생체정보 파기 → {@code voiceprint_access_logs}(P-28). 사유·모델 버전까지</li>
+ *   <li>지운 것 전부 → {@code data_deletion_logs}(P-29). 테이블별 건수를 같은 모양으로</li>
+ * </ul>
+ * 둘 다 없으면 탈퇴 후 남는 증거가 "row 가 없다"뿐인데, 그건 <b>처음부터 없었던 것과
+ * 구분되지 않습니다.</b> 법 제39조가 고의·과실을 추정하므로, 증명 책임은 우리에게 있습니다.
  */
 @Slf4j
 @Service
@@ -83,6 +90,7 @@ public class WithdrawalService {
     private final NotificationRepository notificationRepository;
     private final DeviceRepository deviceRepository;
     private final VoiceprintAccessLogger voiceprintAccessLogger;
+    private final DataDeletionLogger dataDeletionLogger;
     private final PasswordEncoder passwordEncoder;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
@@ -103,7 +111,7 @@ public class WithdrawalService {
      */
     @Transactional
     public void withdraw(Long userId, String rawPassword, String clientIp) {
-        Instant now = clock.instant();
+        Instant startedAt = clock.instant();
 
         // ── ① 비밀번호 검증 → owner 공간 확인 ──────────────
         User user = userRepository.findByIdAndDeletedAtIsNull(userId)
@@ -130,6 +138,10 @@ public class WithdrawalService {
         // ── ② 푸시 대상 수집 (④보다 반드시 먼저) ───────────
         Set<Long> syncTargets = collectSyncTargets(familyId, userId);
 
+        // 지운 건수를 테이블별로 모읍니다. 순서를 유지하려고 LinkedHashMap 입니다 —
+        // 조사 시 "어떤 순서로 지웠나"가 그대로 읽힙니다.
+        Map<String, Integer> deleted = new LinkedHashMap<>();
+
         // ── ③ 생체정보 물리 삭제 ───────────────────────────
         // soft delete 가 허용되지 않습니다(법 제21조). 순서상 가장 먼저 지웁니다.
         //
@@ -141,17 +153,20 @@ public class WithdrawalService {
 
         int voiceprints = voiceprintRepository.deleteAllByUserId(userId);
         int samples = sampleRepository.deleteAllByUserId(userId);
+        deleted.put(DataDeletionLogger.Tables.VOICEPRINTS, voiceprints);
+        deleted.put(DataDeletionLogger.Tables.VOICEPRINT_SAMPLES, samples);
 
         // 지운 직후에 남깁니다. 기록이 실패하면 삭제도 함께 롤백됩니다(MANDATORY 전파) —
         // 지워졌는데 기록이 없는 상태는 복구할 방법이 없고, 롤백은 재시도하면 됩니다.
         // 등록한 적 없는 사용자면 둘 다 0 이라 기록하지 않습니다.
         voiceprintAccessLogger.recordDestroy(userId, userId,
                 VoiceprintAccessLog.Reason.WITHDRAWAL,
-                samples, voiceprints, modelVersion, clientIp, now);
+                samples, voiceprints, modelVersion, clientIp, startedAt);
 
         // ── ④ 멤버십 → left ────────────────────────────────
         // row 를 지우지 않습니다. 남은 가족 폰에 removed_user_ids 로 알려야 하므로
         // "예전에 멤버였다"는 사실이 남아 있어야 합니다.
+        // 삭제가 아니라 상태 변경이므로 data_deletion_logs 대상이 아닙니다.
         // (③에서 컨텍스트가 clear 됐으므로 ①에서 읽은 membership 은 준영속입니다 — 다시 읽습니다)
         membershipRepository.findByUserIdAndStatus(userId, ACTIVE)
                 .ifPresent(FamilyMembership::leave);
@@ -159,23 +174,30 @@ public class WithdrawalService {
         // ── ⑤ 이용 기록 삭제 ───────────────────────────────
         // voice_analyses 를 call_events 보다 먼저 지웁니다 — call_events.voice_analysis_id 가
         // 참조하는 쪽이라 반대로 하면 참조가 떠 있는 순간이 생깁니다.
-        int analyses = voiceAnalysisRepository.deleteAllByUserId(userId);
-        int callEvents = callEventRepository.deleteAllByUserId(userId);
-        int notifications = notificationRepository.deleteAllByUserId(userId);
+        deleted.put(DataDeletionLogger.Tables.VOICE_ANALYSES,
+                voiceAnalysisRepository.deleteAllByUserId(userId));
+        deleted.put(DataDeletionLogger.Tables.CALL_EVENTS,
+                callEventRepository.deleteAllByUserId(userId));
+        deleted.put(DataDeletionLogger.Tables.NOTIFICATIONS,
+                notificationRepository.deleteAllByUserId(userId));
 
         // 별명은 공간과 무관하게 전량입니다 — 탈퇴자를 부르던 이름도, 그가 남을 부르던
         // 이름도 보유 근거가 사라집니다. viewer·target 양방향으로 지웁니다.
-        int aliases = aliasRepository.deleteAllByUserId(userId);
+        deleted.put(DataDeletionLogger.Tables.FAMILY_MEMBER_ALIASES,
+                aliasRepository.deleteAllByUserId(userId));
 
         // demo_sessions 는 아직 구현되지 않았습니다. 데모 기능을 붙이는 시점에
         // 여기에 삭제를 추가하세요 — 명세 ⑤ 에 포함된 테이블입니다.
 
         // ── ⑥ 단말 삭제 ────────────────────────────────────
         // 여기서 push_token 이 사라지므로 ⑨의 푸시는 "남은 가족"에게만 나갑니다.
-        int devices = deviceRepository.deleteAllByUserId(userId);
+        deleted.put(DataDeletionLogger.Tables.DEVICES,
+                deviceRepository.deleteAllByUserId(userId));
 
         // ── ⑦ 세션 전량 종료 ───────────────────────────────
-        refreshTokenRepository.revokeAllByUserId(userId, now);
+        // revoke 는 삭제가 아니라 무효화라 data_deletion_logs 대상이 아닙니다.
+        // refresh_tokens 의 실제 파기는 Phase 13 보관기간 배치(90일)가 맡습니다.
+        refreshTokenRepository.revokeAllByUserId(userId, startedAt);
 
         // ── ⑧ 계정 익명화 ──────────────────────────────────
         // 위 벌크 삭제들이 컨텍스트를 비웠으므로 ①의 인스턴스는 준영속입니다. 다시 읽습니다.
@@ -184,8 +206,18 @@ public class WithdrawalService {
         User managed = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.AUTH_009));
 
-        managed.withdraw(now, anonymizedPhoneNumber(user.getPhoneNumber(), userId));
+        managed.withdraw(startedAt, anonymizedPhoneNumber(user.getPhoneNumber(), userId));
         userRepository.saveAndFlush(managed);
+
+        // users 는 row 를 지우지 않지만 파기 대상입니다 — 번호를 해시로 치환하고 이름을
+        // 익명화하는 건 "복구 불가능한 방법"(법 제21조)의 한 형태입니다. 건수는 1 입니다.
+        deleted.put(DataDeletionLogger.Tables.USERS, 1);
+
+        // ── 파기 기록 (P-29) ───────────────────────────────
+        // 전부 지운 뒤에 남깁니다. 0 건인 테이블도 포함합니다 —
+        // "확인했는데 지울 게 없었다"도 파기 의무 이행입니다.
+        Instant finishedAt = clock.instant();
+        dataDeletionLogger.recordWithdrawal(userId, deleted, startedAt, finishedAt);
 
         // ── ⑨ 커밋 후 동기화 푸시 ──────────────────────────
         // PushDispatcher 가 AFTER_COMMIT 에서 받습니다. 롤백된 탈퇴에 대해 푸시가
@@ -193,15 +225,13 @@ public class WithdrawalService {
         // 이게 빠지면 탈퇴해도 남의 폰에 내 생체정보가 최대 6시간 남습니다.
         if (!syncTargets.isEmpty()) {
             eventPublisher.publishEvent(new FamilySyncEvent(
-                    syncTargets, FamilySyncEvent.Reason.MEMBER_REMOVED, familyId, now));
+                    syncTargets, FamilySyncEvent.Reason.MEMBER_REMOVED, familyId, startedAt));
         }
 
         // 건수만 남깁니다. 어떤 사용자의 무엇이 지워졌는지는 userId 로 충분하고,
         // 이름·번호는 로그에 넣지 않습니다(P-24).
-        log.info("회원 탈퇴 완료 — userId={}, voiceprints={}, samples={}, analyses={}, "
-                        + "callEvents={}, notifications={}, aliases={}, devices={}, syncTargets={}",
-                userId, voiceprints, samples, analyses, callEvents,
-                notifications, aliases, devices, syncTargets.size());
+        log.info("회원 탈퇴 완료 — userId={}, 파기 {}, syncTargets={}",
+                userId, deleted, syncTargets.size());
     }
 
     // ── 내부 ────────────────────────────────────────────────
