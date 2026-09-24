@@ -21,8 +21,8 @@ import org.springframework.web.multipart.MultipartFile;
  * 다른 곳에 오디오 업로드를 추가하려는 생각이 들면 legal-compliance.md 4장을 먼저 읽으세요 —
  * 암호화 전송 · 접속기록 · 즉시 파기 · 처리방침 네 가지 의무가 그 엔드포인트에도 붙습니다.
  *
- * <p>앱은 <b>음질 통과 구간 최대 30초</b>만 보냅니다. 통화 전체를 올리지 않습니다.
- * 서버가 16kHz mono 로 변환하므로 앱이 리샘플링할 필요는 없습니다.
+ * <p>현재 앱은 전처리한 통화의 중앙 5초를 16kHz mono PCM16 WAV로 보냅니다.
+ * 통화 전체와 원본 m4a는 올리지 않습니다.
  */
 @RestController
 @RequiredArgsConstructor

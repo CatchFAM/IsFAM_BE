@@ -58,8 +58,7 @@ import java.util.Locale;
 public class SpoofCheckService {
 
     /**
-     * 앱은 음질 통과 구간 최대 30초를 보냅니다. 35초는 인코딩 오차를 감안한 상한입니다.
-     * 이 값을 넘으면 판정하지 않습니다.
+     * 현재 앱은 중앙 5초만 보내지만 구버전 호환을 위해 35초를 서버 상한으로 둡니다.
      */
     private static final double MAX_DURATION_SECONDS = 35.0;
 
