@@ -83,14 +83,18 @@ public class SpoofCheck {
     /**
      * 판정 상태.
      *
+     * <p>{@code ADDITIONAL_CONFIRMATION} 은 전화 강건 모델은 통과했지만 보조 모델이
+     * 경고한 상태입니다. 위험으로 확정하지도, 안전으로 신뢰하지도 않고 앱에서
+     * 사용자 추가 확인을 요청해야 합니다.
+     *
      * <p>{@code MORE_VOICE_REQUIRED} 는 음질 게이트 미달입니다 —
-     * 길이 &lt; 2.0초, RMS &lt; 0.005, 발화 비율 &lt; 0.25 중 하나라도 걸리면 여기로 떨어집니다.
+     * 길이, RMS, 발화 비율, 추정 SNR 중 하나라도 걸리면 여기로 떨어집니다.
      * 이 상태에서도 점수는 채워져 오지만 신뢰할 수 없는 값이라 앱은 재요청해야 합니다.
      *
      * <p>{@code REJECTED} 는 판정 자체를 하지 않은 요청입니다. 점수가 없습니다.
      */
     public enum AnalysisStatus {
-        COMPLETE, MORE_VOICE_REQUIRED, REJECTED;
+        COMPLETE, ADDITIONAL_CONFIRMATION, MORE_VOICE_REQUIRED, REJECTED;
 
         @JsonValue
         public String toJson() {
@@ -103,8 +107,15 @@ public class SpoofCheck {
          * <p>{@code REJECTED} 는 우리가 정하는 값이라 여기서 나오지 않습니다.
          */
         public static AnalysisStatus from(String value) {
-            if (value != null && COMPLETE.name().equalsIgnoreCase(value.trim())) {
+            if (value == null) {
+                return MORE_VOICE_REQUIRED;
+            }
+            String normalized = value.trim();
+            if (COMPLETE.name().equalsIgnoreCase(normalized)) {
                 return COMPLETE;
+            }
+            if (ADDITIONAL_CONFIRMATION.name().equalsIgnoreCase(normalized)) {
+                return ADDITIONAL_CONFIRMATION;
             }
             return MORE_VOICE_REQUIRED;
         }

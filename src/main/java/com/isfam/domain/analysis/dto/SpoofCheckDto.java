@@ -39,8 +39,8 @@ public final class SpoofCheckDto {
             Double threshold,
 
             /*
-             * more_voice_required 면 위 점수들은 신뢰할 수 없는 값입니다.
-             * 앱은 경고 UI 를 띄우지 말고 다음 세그먼트를 모아 재요청해야 합니다.
+             * additional_confirmation 은 사용자 확인, more_voice_required 는
+             * 더 깨끗한 음성 재수집이 필요합니다. 둘을 하나로 합치면 안 됩니다.
              */
             SpoofCheck.AnalysisStatus analysisStatus,
 
@@ -63,8 +63,8 @@ public final class SpoofCheckDto {
     }
 
     /**
-     * 명세가 정한 3개만 내려보냅니다. FastAPI 는 {@code rms_energy}·{@code peak_amplitude}
-     * 까지 주지만, 앱이 재요청 여부를 판단하는 데 필요한 건 여기까지입니다.
+     * 앱이 재요청 이유를 설명하는 데 필요한 값만 내려보냅니다. FastAPI 의
+     * {@code rms_energy}·{@code peak_amplitude} 는 전달하지 않습니다.
      * 나머지는 {@code spoof_checks} 에 남기지도 않습니다 — 음성의 물리적 특성을
      * 필요 이상으로 축적할 이유가 없습니다.
      */
@@ -73,8 +73,10 @@ public final class SpoofCheckDto {
             @JsonProperty("is_analyzable")
             Boolean analyzable,
 
+            String message,
             Double durationSeconds,
-            Double speechRatio
+            Double speechRatio,
+            Double estimatedSnrDb
     ) {
 
         static AudioQuality from(AntiSpoofingResponse source) {
@@ -84,8 +86,10 @@ public final class SpoofCheckDto {
             }
             return new AudioQuality(
                     quality.isAnalyzable(),
+                    quality.message(),
                     quality.durationSeconds(),
-                    quality.speechRatio());
+                    quality.speechRatio(),
+                    quality.estimatedSnrDb());
         }
     }
 }

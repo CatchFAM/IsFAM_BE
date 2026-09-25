@@ -36,7 +36,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record AntiSpoofingResponse(
 
-        /* "complete" | "more_voice_required" */
+        /* "complete" | "additional_confirmation" | "more_voice_required" */
         @JsonProperty("analysis_status")
         String analysisStatus,
 
@@ -124,7 +124,10 @@ public record AntiSpoofingResponse(
             Double peakAmplitude,
 
             @JsonProperty("speech_ratio")
-            Double speechRatio
+            Double speechRatio,
+
+            @JsonProperty("estimated_snr_db")
+            Double estimatedSnrDb
     ) {
     }
 }
