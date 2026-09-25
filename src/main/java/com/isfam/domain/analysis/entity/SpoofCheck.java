@@ -50,6 +50,17 @@ import java.time.Instant;
  * <p><b>여기에 화자 관련 컬럼을 추가하지 마세요.</b> 이 엔드포인트는 딥보이스 모델만
  * 실행합니다. 임베딩 추출·가족 대조가 끼어드는 순간 "합성 판별"이 "발신자 식별"로
  * 성격이 바뀌어, 동의를 받을 수 없는 상대방의 민감정보 처리가 됩니다.
+ *
+ * <p><b>Phase 12 — 고시 제8조 항목 5개를 여기서 전부 뽑을 수 있게 됐습니다.</b>
+ * <pre>
+ *   계정      → user_id
+ *   일시      → requested_at
+ *   접속지    → client_ip
+ *   정보주체  → user_id (본인 통화이므로 계정과 같음)
+ *   수행업무  → operation   ← Phase 12 에서 추가
+ * </pre>
+ * {@code trace_id} 도 함께 붙어, 같은 요청이 {@code embedding_access_logs} ·
+ * {@code voiceprint_access_logs} · {@code data_deletion_logs} 에 남긴 row 와 이어집니다.
  */
 @Entity
 @Getter
@@ -61,7 +72,9 @@ import java.time.Instant;
                 @Index(name = "idx_spoof_checks_call_event",
                         columnList = "call_event_id"),
                 @Index(name = "idx_spoof_checks_status_requested",
-                        columnList = "analysis_status, requested_at")
+                        columnList = "analysis_status, requested_at"),
+                @Index(name = "idx_spoof_checks_trace",
+                        columnList = "trace_id")
         }
 )
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -123,9 +136,49 @@ public class SpoofCheck {
         }
     }
 
+    /**
+     * 고시 제8조가 요구하는 <b>"수행업무"</b> (Phase 12).
+     *
+     * <p><b>{@link AnalysisStatus} 와 일부 겹칩니다.</b> {@code REJECT} 는
+     * {@code analysisStatus == REJECTED} 와 같은 뜻입니다. 그런데도 컬럼을 따로 둔 이유는
+     * 기록 테이블 네 개가 <b>같은 이름의 컬럼으로 감사 자료를 내보낼 수 있어야</b>
+     * 하기 때문입니다 — {@code embedding_access_logs} · {@code voiceprint_access_logs} ·
+     * {@code data_deletion_logs} 가 전부 {@code operation} 을 갖고 있고, 실태점검 대응은
+     * 네 테이블을 한 형식으로 합쳐 제출하는 작업입니다. 여기만 컬럼 이름이 다르면
+     * 그 쿼리를 테이블마다 따로 써야 합니다.
+     *
+     * <p>겹치는 값이 <b>따로 놀지 않도록</b> DB CHECK 제약으로 묶어두었습니다 —
+     * {@code (analysis_status = 'REJECTED') = (operation = 'REJECT')}.
+     * 한쪽만 바꾸면 INSERT 가 실패합니다.
+     */
+    public enum Operation {
+        /** 통화 음성을 받아 합성 여부를 판별함 */
+        DETECT,
+        /** 통화 음성을 받았으나 상한 초과·헤더 불량으로 판별하지 않음 */
+        REJECT;
+
+        @JsonValue
+        public String toJson() {
+            return name().toLowerCase();
+        }
+    }
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /**
+     * 같은 요청에서 남은 다른 기록·로그와 이어 붙이는 값 (Phase 12).
+     *
+     * <p>{@code TraceIdFilter} 가 요청마다 부여하고 {@code MdcContext} 가 들고 있습니다.
+     * 조사관이 "이 판정과 이 파기가 같은 요청이었습니까"를 물으면 이 값이 답입니다.
+     *
+     * <p><b>엔티티에서는 nullable 입니다.</b> 컬럼이 생기기 전의 row 가 이미 있어서
+     * {@code ddl-auto=update} 로는 NOT NULL 을 걸 수 없습니다. 보강 SQL 이 기존 row 를
+     * {@code 'legacy'} 로 채운 뒤 NOT NULL 을 겁니다 — 그 뒤로는 DB 가 강제합니다.
+     */
+    @Column(name = "trace_id", length = 64)
+    private String traceId;
 
     @Column(name = "user_id", nullable = false)
     private Long userId;
@@ -136,6 +189,16 @@ public class SpoofCheck {
     /** X-Device-Id. 어느 단말에서 음성이 올라왔는지 — 접속기록의 일부입니다 */
     @Column(name = "device_id")
     private Long deviceId;
+
+    /**
+     * 고시 제8조의 "수행업무" (Phase 12).
+     *
+     * <p>nullable 인 이유는 {@link #traceId} 와 같습니다. 보강 SQL 이 기존 row 를
+     * {@code analysis_status} 로부터 채운 뒤 NOT NULL 을 겁니다.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "operation", length = 20)
+    private Operation operation;
 
     /** 거부 row 에서는 null — 판정을 하지 않았으므로 값이 없습니다 */
     @Column(name = "spoof_score")
@@ -199,15 +262,18 @@ public class SpoofCheck {
     @Column(name = "remote_purged")
     private Boolean remotePurged;
 
-    private SpoofCheck(Long userId, Long callEventId, Long deviceId, Double spoofScore,
+    private SpoofCheck(String traceId, Long userId, Long callEventId, Long deviceId,
+                       Operation operation, Double spoofScore,
                        Boolean spoofed, Double threshold, AnalysisStatus analysisStatus,
                        RejectedReason rejectedReason, Integer analyzedSegments,
                        String modelVersion, Double durationSeconds, Integer audioBytes,
                        String clientIp, Instant requestedAt, Instant purgedAt,
                        Boolean remotePurged) {
+        this.traceId = traceId;
         this.userId = userId;
         this.callEventId = callEventId;
         this.deviceId = deviceId;
+        this.operation = operation;
         this.spoofScore = spoofScore;
         this.spoofed = spoofed;
         this.threshold = threshold;
@@ -229,15 +295,20 @@ public class SpoofCheck {
      * <p><b>{@code purgedAt} 과 {@code remotePurged} 를 생성자에서 받습니다.</b> 나중에
      * 채우게 하면 "저장은 됐는데 파기 기록이 빠진" row 가 생길 수 있습니다. 양쪽 파기가
      * 끝난 뒤에야 이 객체를 만들 수 있도록 강제하는 게 이 시그니처의 목적입니다.
+     *
+     * <p>{@code operation} 은 받지 않고 {@link Operation#DETECT} 로 고정합니다 —
+     * 어느 팩토리를 썼는지가 곧 수행업무라, 호출부가 따로 정하면 틀릴 여지만 생깁니다.
      */
-    public static SpoofCheck of(Long userId, Long callEventId, Long deviceId, Double spoofScore,
-                                Boolean spoofed, Double threshold, AnalysisStatus analysisStatus,
-                                Integer analyzedSegments, String modelVersion,
-                                Double durationSeconds, Integer audioBytes, String clientIp,
-                                Instant requestedAt, Instant purgedAt, Boolean remotePurged) {
-        return new SpoofCheck(userId, callEventId, deviceId, spoofScore, spoofed, threshold,
-                analysisStatus, null, analyzedSegments, modelVersion, durationSeconds,
-                audioBytes, clientIp, requestedAt, purgedAt, remotePurged);
+    public static SpoofCheck of(String traceId, Long userId, Long callEventId, Long deviceId,
+                                Double spoofScore, Boolean spoofed, Double threshold,
+                                AnalysisStatus analysisStatus, Integer analyzedSegments,
+                                String modelVersion, Double durationSeconds, Integer audioBytes,
+                                String clientIp, Instant requestedAt, Instant purgedAt,
+                                Boolean remotePurged) {
+        return new SpoofCheck(traceId, userId, callEventId, deviceId, Operation.DETECT,
+                spoofScore, spoofed, threshold, analysisStatus, null, analyzedSegments,
+                modelVersion, durationSeconds, audioBytes, clientIp, requestedAt,
+                purgedAt, remotePurged);
     }
 
     /**
@@ -250,14 +321,14 @@ public class SpoofCheck {
      * 막았으면 분석 서버에 보낸 적이 없으니 null, FastAPI 응답의 길이가 상한을 넘어
      * 거부했으면 이미 보낸 뒤라 그쪽 파기 여부를 기록해야 합니다.
      */
-    public static SpoofCheck rejected(Long userId, Long callEventId, Long deviceId,
-                                      RejectedReason reason, Double durationSeconds,
-                                      Integer audioBytes, String clientIp,
-                                      Instant requestedAt, Instant purgedAt,
-                                      Boolean remotePurged) {
-        return new SpoofCheck(userId, callEventId, deviceId, null, null, null,
-                AnalysisStatus.REJECTED, reason, null, null, durationSeconds,
-                audioBytes, clientIp, requestedAt, purgedAt, remotePurged);
+    public static SpoofCheck rejected(String traceId, Long userId, Long callEventId,
+                                      Long deviceId, RejectedReason reason,
+                                      Double durationSeconds, Integer audioBytes,
+                                      String clientIp, Instant requestedAt,
+                                      Instant purgedAt, Boolean remotePurged) {
+        return new SpoofCheck(traceId, userId, callEventId, deviceId, Operation.REJECT,
+                null, null, null, AnalysisStatus.REJECTED, reason, null, null,
+                durationSeconds, audioBytes, clientIp, requestedAt, purgedAt, remotePurged);
     }
 
     /**

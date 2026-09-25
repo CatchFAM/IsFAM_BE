@@ -54,4 +54,21 @@ public interface DeviceRepository extends JpaRepository<Device, Long> {
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update Device d set d.pushToken = null where d.pushToken in :tokens")
     int clearPushTokens(@Param("tokens") Collection<String> tokens);
+
+    // ── Phase 12 추가 ───────────────────────────────────────
+
+    /**
+     * 회원 탈퇴 시 삭제 (명세 ⑥).
+     *
+     * <p><b>위 {@code clearPushTokens} 와 목적이 다릅니다.</b> 그쪽은 죽은 토큰만 비우고
+     * row 는 남깁니다(사용자가 돌아올 수 있으므로). 이쪽은 계정이 사라지는 경우라
+     * row 자체를 지웁니다 — 단말 모델·OS 버전·권한 스냅샷은 사람과 연결된 정보이고,
+     * 계정이 없어지면 보유 근거도 사라집니다.
+     *
+     * <p>순서상 ⑨의 동기화 푸시보다 먼저 실행되므로, 탈퇴자 본인 폰에는 푸시가 가지
+     * 않습니다. 의도한 동작입니다 — 본인은 이미 탈퇴 응답(204)을 받고 로컬을 정리합니다.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from Device d where d.userId = :userId")
+    int deleteAllByUserId(@Param("userId") Long userId);
 }

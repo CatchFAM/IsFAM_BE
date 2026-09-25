@@ -51,4 +51,19 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
     int deleteByTarget(@Param("userId") Long userId,
                        @Param("targetType") Notification.TargetType targetType,
                        @Param("targetId") Long targetId);
+
+    // ── Phase 12 추가 ───────────────────────────────────────
+
+    /**
+     * 회원 탈퇴 시 삭제 (명세 ⑤).
+     *
+     * <p>알림 본문에는 가족 구성원의 닉네임이 들어갑니다({@code memberJoined} ·
+     * {@code memberLeft}). 탈퇴자의 알림함을 남겨두면 그 이름들이 근거 없이 보관됩니다.
+     *
+     * <p><b>보관 기간과 별개입니다.</b> Phase 13 의 90일 정리 배치(P-27)는 살아 있는
+     * 계정의 오래된 알림을 지우는 것이고, 이쪽은 계정이 사라질 때 전량입니다.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from Notification n where n.userId = :userId")
+    int deleteAllByUserId(@Param("userId") Long userId);
 }

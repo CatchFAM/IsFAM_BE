@@ -5,6 +5,7 @@ import com.isfam.common.crypto.EmbeddingCodec;
 import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
 import com.isfam.common.model.ModelVersionPolicy;
+import com.isfam.domain.audit.service.EmbeddingAccessLogger;
 import com.isfam.domain.auth.entity.User;
 import com.isfam.domain.auth.repository.UserRepository;
 import com.isfam.domain.device.repository.DeviceRepository;
@@ -51,6 +52,11 @@ import java.util.stream.Collectors;
  *   <li>{@code voiceprints} row 존재</li>
  * </ol>
  * 하나라도 어긋나면 {@code members} 가 아니라 {@code removed_user_ids} 에 들어갑니다.
+ *
+ * <p><b>Phase 12 — 여기가 제3자 제공의 실행 시점이라 기록을 남깁니다</b>(P-16).
+ * 동의 게이팅(위 ②)은 잘 되어 있었는데 <b>동의대로 실행했다는 증거</b>가 없었습니다(S2-c).
+ * 제공 사실을 증명할 수도 부인할 수도 없는 상태였고, 그 구멍에서 열람권(제35조)과
+ * 유출 통지(제34조)가 함께 막혀 있었습니다.
  */
 @Slf4j
 @Service
@@ -63,16 +69,28 @@ public class EmbeddingSyncService {
     private final VoiceprintRepository voiceprintRepository;
     private final UserRepository userRepository;
     private final DeviceRepository deviceRepository;
+    private final EmbeddingAccessLogger accessLogger;
     private final EmbeddingCipher embeddingCipher;
     private final ModelVersionPolicy modelVersionPolicy;
     private final Clock clock;
 
     /**
+     * <p><b>{@code readOnly = true} 를 뗐습니다</b>(Phase 12). 이 메서드 안에서
+     * {@code embedding_access_logs} 에 INSERT 가 일어나는데, 읽기 전용 트랜잭션은
+     * Hibernate 의 flush 를 막아 그 INSERT 가 <b>예외 하나 없이 사라집니다</b>.
+     * 기록을 남기려다 "기록이 남은 줄 아는 상태"를 만드는 게 가장 나쁜 결과라
+     * 읽기 전용을 포기했습니다. 조회한 엔티티를 수정하지 않으므로 더티 체킹으로
+     * 무언가 저장될 일은 없습니다.
+     *
+     * <p>기록이 <b>같은 트랜잭션</b>이라는 점이 핵심입니다 — 기록이 실패하면 임베딩도
+     * 나가지 않습니다. 자세한 이유는 {@code EmbeddingAccessLogger} javadoc 에 있습니다.
+     *
      * @param rawSince 지난 응답의 {@code synced_at} 을 그대로. 최초엔 null(전량)
+     * @param clientIp 접속기록의 "접속지". 컨트롤러가 {@code ClientIpResolver} 로 뽑아 넘깁니다
      */
-    @Transactional(readOnly = true)
+    @Transactional
     public EmbeddingSyncDto.EmbeddingsResponse getFamilyEmbeddings(
-            Long userId, Long deviceId, String rawSince) {
+            Long userId, Long deviceId, String rawSince, String clientIp) {
 
         requireMyDevice(userId, deviceId);
 
@@ -161,6 +179,22 @@ public class EmbeddingSyncService {
 
         String modelVersion = resolveModelVersion(voiceprints.values());
 
+        // ── 제3자 제공 기록 (P-16) ─────────────────────────
+        // 응답을 조립한 "뒤"에 남깁니다 — members 가 확정돼야 provided_user_ids 가
+        // 실제로 내려간 멤버 전원과 일치합니다. 앞에서 남기면 후보 목록이 기록되고,
+        // 그건 사실과 다른 제공 이력입니다.
+        //
+        // 여기서 예외가 나면 위 조회까지 통째로 롤백되고 임베딩은 나가지 않습니다.
+        // 앱은 다음 주기(최대 6시간)에 재시도합니다.
+        List<Long> providedUserIds = members.stream()
+                .map(EmbeddingSyncDto.MemberEmbedding::userId)
+                .toList();
+
+        accessLogger.recordProvide(
+                userId, deviceId, familyId,
+                providedUserIds, List.copyOf(removed),
+                modelVersion, since, syncedAt, clientIp, syncedAt);
+
         log.debug("임베딩 동기화 — members {}건, removed {}건 (userId={}, familyId={}, since={})",
                 members.size(), removed.size(), userId, familyId, since);
 
@@ -176,7 +210,8 @@ public class EmbeddingSyncService {
      *
      * <p>여기서 굳이 확인하는 이유는 이 응답이 가족의 생체정보를 담기 때문입니다.
      * access_token 만으로 충분해 보이지만, 단말 확인을 붙여두면 어느 기기가 언제 임베딩을
-     * 받아갔는지 {@code embedding_synced_at} 으로 추적됩니다.
+     * 받아갔는지 {@code embedding_access_logs.requester_device_id} 로 추적됩니다 —
+     * Phase 12 전까지는 덮어써지는 {@code devices.embedding_synced_at} 이 전부였습니다(S2-a).
      */
     private void requireMyDevice(Long userId, Long deviceId) {
         deviceRepository.findByIdAndUserId(deviceId, userId)

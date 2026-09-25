@@ -46,4 +46,24 @@ public interface SpoofCheckRepository extends JpaRepository<SpoofCheck, Long> {
      * {@code = false} 로 번역되어 SQL 의 3값 논리상 null 이 자동으로 빠집니다.
      */
     long countByRemotePurgedIsFalse();
+
+    // ── Phase 12 추가 ───────────────────────────────────────
+
+    /**
+     * 같은 요청에서 남은 기록을 모을 때 씁니다.
+     *
+     * <p>사고 조사에서 하나의 요청이 네 기록 테이블에 남긴 row 를 한 번에 꺼내는 경로입니다 —
+     * {@code embedding_access_logs} · {@code voiceprint_access_logs} ·
+     * {@code data_deletion_logs} 에도 같은 이름의 조회가 있습니다.
+     */
+    List<SpoofCheck> findByTraceId(String traceId);
+
+    /**
+     * 수행업무별 집계 (고시 제8조).
+     *
+     * <p>{@code REJECT} 건수는 인프라 설계 계획의 대시보드 지표 "35초 초과 거부"와
+     * 같은 값입니다. {@code analysis_status = 'REJECTED'} 로도 같은 수가 나오는데,
+     * 둘이 어긋날 수 없도록 DB CHECK 제약으로 묶어두었습니다.
+     */
+    long countByOperation(SpoofCheck.Operation operation);
 }
