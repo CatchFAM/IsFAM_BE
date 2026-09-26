@@ -36,13 +36,15 @@ import java.time.Instant;
  *   select count(*) from spoof_checks where purged_at is null;        -- 항상 0
  *   select count(*) from spoof_checks where remote_purged = false;    -- 항상 0
  * </pre>
- * 두 쿼리는 {@code PurgeMonitor} 가 5분마다 돌리고, 0 이 아니면 알람 +
- * {@code /actuator/health} DOWN 입니다(P-21).
+ * 두 쿼리는 {@code PurgeMonitor} 가 5분마다 돌립니다(P-21).
  *
- * <p><b>판정을 거부한 요청도 row 를 남깁니다</b>({@link AnalysisStatus#REJECTED}).
- * 상한을 넘는 음성이 들어와도 그 사실이 기록에 남지 않으면 "30초만 받는다"는
- * 통제를 만든 의미가 없습니다(P-20). 거부 row 는 판정값 4종이 null 이고
- * {@code rejectedReason} 이 채워집니다.
+ * <p><b>판정하지 못한 요청도 row 를 남깁니다.</b>
+ * <ul>
+ *   <li>{@link AnalysisStatus#REJECTED} — 우리가 거부 (상한 초과·헤더 불량)</li>
+ *   <li>{@link AnalysisStatus#FAILED} — 분석 서버 호출이 실패 (260926, P-20 재개)</li>
+ * </ul>
+ * 둘 다 판정값 4종이 null 입니다. 음성이 들어왔다는 사실은 판정 여부와 상관없이
+ * 접속기록 대상입니다.
  *
  * <p><b>이 테이블은 {@code DELETE /voice-analyses} 로 지워지지 않습니다.</b>
  * 사용자가 분석 기록을 지우는 것과 사업자가 접속기록 보관 의무를 이행하는 것은 별개입니다.
@@ -61,6 +63,9 @@ import java.time.Instant;
  * </pre>
  * {@code trace_id} 도 함께 붙어, 같은 요청이 {@code embedding_access_logs} ·
  * {@code voiceprint_access_logs} · {@code data_deletion_logs} 에 남긴 row 와 이어집니다.
+ *
+ * <p><b>DB CHECK 제약은 {@code db/phase13-0.sql} 이 기준입니다.</b> 이 enum 에 값을 더하면
+ * 그 SQL 의 {@code ck_spoof_checks_status} 도 같이 고쳐야 INSERT 가 통과합니다.
  */
 @Entity
 @Getter
@@ -91,10 +96,12 @@ public class SpoofCheck {
      * 길이, RMS, 발화 비율, 추정 SNR 중 하나라도 걸리면 여기로 떨어집니다.
      * 이 상태에서도 점수는 채워져 오지만 신뢰할 수 없는 값이라 앱은 재요청해야 합니다.
      *
-     * <p>{@code REJECTED} 는 판정 자체를 하지 않은 요청입니다. 점수가 없습니다.
+     * <p>{@code REJECTED} 는 우리가 판정을 거부한 요청, {@code FAILED} 는 분석 서버 호출이
+     * 실패해 판정을 받지 못한 요청입니다. 둘 다 점수가 없고 API 응답으로 나가지 않습니다
+     * (앱은 에러 응답을 받습니다).
      */
     public enum AnalysisStatus {
-        COMPLETE, ADDITIONAL_CONFIRMATION, MORE_VOICE_REQUIRED, REJECTED;
+        COMPLETE, ADDITIONAL_CONFIRMATION, MORE_VOICE_REQUIRED, REJECTED, FAILED;
 
         @JsonValue
         public String toJson() {
@@ -104,7 +111,8 @@ public class SpoofCheck {
         /**
          * FastAPI 응답의 analysis_status. 모르는 값이 오면 신뢰할 수 없으므로 재요청 쪽으로 붙입니다.
          *
-         * <p>{@code REJECTED} 는 우리가 정하는 값이라 여기서 나오지 않습니다.
+         * <p>{@code REJECTED}·{@code FAILED} 는 우리가 정하는 값이라 여기서 나오지 않습니다 —
+         * 분석 서버가 {@code "failed"} 를 보내도 {@code MORE_VOICE_REQUIRED} 입니다.
          */
         public static AnalysisStatus from(String value) {
             if (value == null) {
@@ -142,17 +150,18 @@ public class SpoofCheck {
      * <p><b>{@link AnalysisStatus} 와 일부 겹칩니다.</b> {@code REJECT} 는
      * {@code analysisStatus == REJECTED} 와 같은 뜻입니다. 그런데도 컬럼을 따로 둔 이유는
      * 기록 테이블 네 개가 <b>같은 이름의 컬럼으로 감사 자료를 내보낼 수 있어야</b>
-     * 하기 때문입니다 — {@code embedding_access_logs} · {@code voiceprint_access_logs} ·
-     * {@code data_deletion_logs} 가 전부 {@code operation} 을 갖고 있고, 실태점검 대응은
-     * 네 테이블을 한 형식으로 합쳐 제출하는 작업입니다. 여기만 컬럼 이름이 다르면
-     * 그 쿼리를 테이블마다 따로 써야 합니다.
+     * 하기 때문입니다.
      *
      * <p>겹치는 값이 <b>따로 놀지 않도록</b> DB CHECK 제약으로 묶어두었습니다 —
      * {@code (analysis_status = 'REJECTED') = (operation = 'REJECT')}.
      * 한쪽만 바꾸면 INSERT 가 실패합니다.
      */
     public enum Operation {
-        /** 통화 음성을 받아 합성 여부를 판별함 */
+        /**
+         * 통화 음성을 받아 합성 여부 판별을 수행함.
+         * 분석 서버 호출이 실패한 경우({@code FAILED})도 여기입니다 — 음성을 받아
+         * 판별 목적으로 분석 서버에 보냈다는 처리 사실은 같습니다.
+         */
         DETECT,
         /** 통화 음성을 받았으나 상한 초과·헤더 불량으로 판별하지 않음 */
         REJECT;
@@ -170,11 +179,7 @@ public class SpoofCheck {
     /**
      * 같은 요청에서 남은 다른 기록·로그와 이어 붙이는 값 (Phase 12).
      *
-     * <p>{@code TraceIdFilter} 가 요청마다 부여하고 {@code MdcContext} 가 들고 있습니다.
-     * 조사관이 "이 판정과 이 파기가 같은 요청이었습니까"를 물으면 이 값이 답입니다.
-     *
-     * <p><b>엔티티에서는 nullable 입니다.</b> 컬럼이 생기기 전의 row 가 이미 있어서
-     * {@code ddl-auto=update} 로는 NOT NULL 을 걸 수 없습니다. 보강 SQL 이 기존 row 를
+     * <p><b>엔티티에서는 nullable 입니다.</b> 보강 SQL 이 기존 row 를
      * {@code 'legacy'} 로 채운 뒤 NOT NULL 을 겁니다 — 그 뒤로는 DB 가 강제합니다.
      */
     @Column(name = "trace_id", length = 64)
@@ -190,17 +195,12 @@ public class SpoofCheck {
     @Column(name = "device_id")
     private Long deviceId;
 
-    /**
-     * 고시 제8조의 "수행업무" (Phase 12).
-     *
-     * <p>nullable 인 이유는 {@link #traceId} 와 같습니다. 보강 SQL 이 기존 row 를
-     * {@code analysis_status} 로부터 채운 뒤 NOT NULL 을 겁니다.
-     */
+    /** 고시 제8조의 "수행업무" (Phase 12). nullable 인 이유는 {@link #traceId} 와 같습니다 */
     @Enumerated(EnumType.STRING)
     @Column(name = "operation", length = 20)
     private Operation operation;
 
-    /** 거부 row 에서는 null — 판정을 하지 않았으므로 값이 없습니다 */
+    /** 거부·실패 row 에서는 null — 판정을 하지 않았으므로 값이 없습니다 */
     @Column(name = "spoof_score")
     private Double spoofScore;
 
@@ -219,6 +219,16 @@ public class SpoofCheck {
     @Enumerated(EnumType.STRING)
     @Column(name = "rejected_reason", length = 32)
     private RejectedReason rejectedReason;
+
+    /**
+     * 분석 서버 호출 실패 종류 (260926). {@code analysisStatus == FAILED} 일 때만 채웁니다.
+     *
+     * <p>에러 코드 이름({@code COMMON_009} 등) 또는 예외 클래스 단순명입니다.
+     * <b>예외 메시지는 넣지 않습니다</b> — {@code data_deletion_logs.failure_type} 과 같은 규칙(P-24).
+     * enum 이 아닌 이유도 같습니다: 실패 종류는 계속 늘어납니다.
+     */
+    @Column(name = "failure_type", length = 64)
+    private String failureType;
 
     @Column(name = "analyzed_segments")
     private Integer analyzedSegments;
@@ -241,23 +251,20 @@ public class SpoofCheck {
     @Column(name = "requested_at", nullable = false)
     private Instant requestedAt;
 
-    /** <b>null 이면 파기 누락입니다.</b> 거부 row 에도 반드시 채웁니다 */
+    /** <b>null 이면 파기 누락입니다.</b> 거부·실패 row 에도 반드시 채웁니다 */
     @Column(name = "purged_at")
     private Instant purgedAt;
 
     /**
      * 분석 서버(FastAPI) 임시 파일 파기 여부 (P-23).
      *
-     * <p><b>세 가지 상태를 구별합니다.</b>
      * <ul>
      *   <li>{@code true}  — 분석 서버가 지웠다고 응답</li>
      *   <li>{@code false} — 지우지 못했다고 응답. <b>파기 실패이며 알람 대상</b></li>
-     *   <li>{@code null}  — 분석 서버에 보내지 않았거나(사전 거부),
-     *       아직 이 필드를 안 보내는 버전. 실패로 세지 않습니다</li>
+     *   <li>{@code null}  — 셋 중 하나. ① 보내지 않음(사전 거부) ② 이 필드를 안 보내는 버전
+     *       ③ <b>보냈지만 응답을 받지 못함({@code FAILED})</b>. ③은 "지웠는지 알 수 없음"이라
+     *       실패로 세지는 않되 {@code analysis_status = 'FAILED'} 로 따로 셉니다</li>
      * </ul>
-     * null 과 false 를 합치면 배포 과도기의 공백이 파기 실패로 집계돼
-     * 진짜 실패가 묻힙니다. 대신 FastAPI 배포가 끝난 뒤에도 null 이 계속 나오면
-     * 그건 그것대로 확인해야 합니다.
      */
     @Column(name = "remote_purged")
     private Boolean remotePurged;
@@ -265,10 +272,10 @@ public class SpoofCheck {
     private SpoofCheck(String traceId, Long userId, Long callEventId, Long deviceId,
                        Operation operation, Double spoofScore,
                        Boolean spoofed, Double threshold, AnalysisStatus analysisStatus,
-                       RejectedReason rejectedReason, Integer analyzedSegments,
-                       String modelVersion, Double durationSeconds, Integer audioBytes,
-                       String clientIp, Instant requestedAt, Instant purgedAt,
-                       Boolean remotePurged) {
+                       RejectedReason rejectedReason, String failureType,
+                       Integer analyzedSegments, String modelVersion, Double durationSeconds,
+                       Integer audioBytes, String clientIp, Instant requestedAt,
+                       Instant purgedAt, Boolean remotePurged) {
         this.traceId = traceId;
         this.userId = userId;
         this.callEventId = callEventId;
@@ -279,6 +286,7 @@ public class SpoofCheck {
         this.threshold = threshold;
         this.analysisStatus = analysisStatus;
         this.rejectedReason = rejectedReason;
+        this.failureType = failureType;
         this.analyzedSegments = analyzedSegments;
         this.modelVersion = modelVersion;
         this.durationSeconds = durationSeconds;
@@ -293,11 +301,10 @@ public class SpoofCheck {
      * 판정이 끝난 요청.
      *
      * <p><b>{@code purgedAt} 과 {@code remotePurged} 를 생성자에서 받습니다.</b> 나중에
-     * 채우게 하면 "저장은 됐는데 파기 기록이 빠진" row 가 생길 수 있습니다. 양쪽 파기가
-     * 끝난 뒤에야 이 객체를 만들 수 있도록 강제하는 게 이 시그니처의 목적입니다.
+     * 채우게 하면 "저장은 됐는데 파기 기록이 빠진" row 가 생길 수 있습니다.
      *
      * <p>{@code operation} 은 받지 않고 {@link Operation#DETECT} 로 고정합니다 —
-     * 어느 팩토리를 썼는지가 곧 수행업무라, 호출부가 따로 정하면 틀릴 여지만 생깁니다.
+     * 어느 팩토리를 썼는지가 곧 수행업무입니다.
      */
     public static SpoofCheck of(String traceId, Long userId, Long callEventId, Long deviceId,
                                 Double spoofScore, Boolean spoofed, Double threshold,
@@ -306,16 +313,13 @@ public class SpoofCheck {
                                 String clientIp, Instant requestedAt, Instant purgedAt,
                                 Boolean remotePurged) {
         return new SpoofCheck(traceId, userId, callEventId, deviceId, Operation.DETECT,
-                spoofScore, spoofed, threshold, analysisStatus, null, analyzedSegments,
+                spoofScore, spoofed, threshold, analysisStatus, null, null, analyzedSegments,
                 modelVersion, durationSeconds, audioBytes, clientIp, requestedAt,
                 purgedAt, remotePurged);
     }
 
     /**
      * 판정을 거부한 요청.
-     *
-     * <p>판정값 4종({@code spoofScore}·{@code spoofed}·{@code threshold}·{@code modelVersion})은
-     * null 입니다. 거부했는데 점수가 있는 상태가 생기지 않도록 DB CHECK 제약으로도 막습니다.
      *
      * <p>{@code remotePurged} 는 <b>거부 시점에 따라 달라집니다.</b> 헤더 파싱 단계에서
      * 막았으면 분석 서버에 보낸 적이 없으니 null, FastAPI 응답의 길이가 상한을 넘어
@@ -327,8 +331,26 @@ public class SpoofCheck {
                                       String clientIp, Instant requestedAt,
                                       Instant purgedAt, Boolean remotePurged) {
         return new SpoofCheck(traceId, userId, callEventId, deviceId, Operation.REJECT,
-                null, null, null, AnalysisStatus.REJECTED, reason, null, null,
+                null, null, null, AnalysisStatus.REJECTED, reason, null, null, null,
                 durationSeconds, audioBytes, clientIp, requestedAt, purgedAt, remotePurged);
+    }
+
+    /**
+     * 분석 서버 호출이 실패한 요청 (260926, P-20 재개).
+     *
+     * <p>음성은 이미 우리 서버에 들어왔고 분석 서버로도 나갔습니다. 판정이 없다고 row 를
+     * 만들지 않으면 "들어왔다는 기록조차 없다"(S1-d)가 이 경로로 되살아납니다.
+     *
+     * <p>{@code remotePurged} 는 받지 않고 null 입니다 — 응답을 못 받았으니 분석 서버가
+     * 지웠는지 알 방법이 없습니다. {@code durationSeconds} 는 WAV 헤더 계산값입니다.
+     */
+    public static SpoofCheck failed(String traceId, Long userId, Long callEventId,
+                                    Long deviceId, String failureType,
+                                    Double durationSeconds, Integer audioBytes,
+                                    String clientIp, Instant requestedAt, Instant purgedAt) {
+        return new SpoofCheck(traceId, userId, callEventId, deviceId, Operation.DETECT,
+                null, null, null, AnalysisStatus.FAILED, null, failureType, null, null,
+                durationSeconds, audioBytes, clientIp, requestedAt, purgedAt, null);
     }
 
     /**
@@ -339,8 +361,16 @@ public class SpoofCheck {
         return spoofed;
     }
 
-    /** 판정 거부된 요청으로는 분석 결과를 제출할 수 없습니다 */
     public boolean isRejected() {
         return analysisStatus == AnalysisStatus.REJECTED;
+    }
+
+    /**
+     * 판정값(점수)이 있는 row 인지. 분석 결과 제출({@code POST /voice-analyses})의 조건입니다.
+     * 거부·실패 row 로는 제출할 수 없습니다.
+     */
+    public boolean hasVerdict() {
+        return analysisStatus != AnalysisStatus.REJECTED
+                && analysisStatus != AnalysisStatus.FAILED;
     }
 }
