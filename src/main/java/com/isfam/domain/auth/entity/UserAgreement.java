@@ -31,14 +31,17 @@ public class UserAgreement {
     /**
      * 동의 항목. 법 제23조상 민감정보 처리와 제3자 제공은 별도 항목이어야 합니다.
      *
-     * <p>가입 시 4종이 한꺼번에 기록됩니다(AuthService.saveAgreements).
+     * <p>가입 시 5종이 한꺼번에 기록됩니다(AuthService.saveAgreements).
      *
      * <p><b>값을 추가할 때는 DB 제약도 함께 고치세요.</b> Hibernate 가 테이블을 만들 때
      * {@code agreement_type} 에 {@code CHECK (... IN (...))} 를 붙이고,
      * {@code ddl-auto=update} 는 값이 늘어도 그 제약을 고치지 않습니다 —
      * 새 값의 INSERT 가 제약 위반으로 실패합니다(db/phase13-0.sql 과 같은 이유).
+     * 현재 정의: db/phase14-2.sql
      */
     public enum Type {
+        /** 만 14세 이상 확인 (필수) — 동의가 아니라 확인. 생년월일 대신 이 사실만 남깁니다 (P-08) */
+        AGE_OVER_14,
         /** 이용약관 (필수) */
         TERMS,
         /** 개인정보 처리방침 (필수) — Phase 14 P-06 부터 가입 시 기록 */

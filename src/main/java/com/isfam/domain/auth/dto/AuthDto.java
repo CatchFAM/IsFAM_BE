@@ -1,6 +1,7 @@
 package com.isfam.domain.auth.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -31,6 +32,10 @@ public final class AuthDto {
      * 이 필드를 모르는 앱 빌드는 값을 보내지 않는데, {@code @NotNull} 이면 그 요청이
      * COMMON_002 "입력값을 확인해 주세요"로 떨어져 무엇이 빠졌는지 알 수 없습니다.
      * 누락도 "처리방침 동의를 받지 못한 상태"라 AUTH_007 로 내보내는 편이 명세와 맞습니다.
+     *
+     * <p><b>{@code ageOver14} 도 같은 이유로 {@code @NotNull} 이 없습니다</b> (Phase 14, P-08).
+     * 누락·false 모두 AUTH_010 입니다 — "만 14세 이상임을 확인받지 못한 상태"는
+     * 14세 미만과 똑같이 다뤄야 합니다. 생년월일은 받지 않습니다(최소 수집).
      */
     public record SignupRequest(
             @NotBlank(message = "휴대폰 번호를 입력해 주세요")
@@ -52,6 +57,14 @@ public final class AuthDto {
             @Size(max = 50)
             String displayName,
 
+            /**
+             * 만 14세 이상 확인 (필수). null·false 모두 AUTH_010.
+             * <b>{@code @JsonProperty} 를 지우지 마세요</b> — SNAKE_CASE 전략은 숫자 앞에
+             * 밑줄을 넣지 않아 {@code age_over14} 로 바뀌고, 앱이 보낸 {@code age_over_14} 가
+             * 조용히 null 이 되어 모든 가입이 AUTH_010 으로 막힙니다.
+             */
+            @JsonProperty("age_over_14")
+            Boolean ageOver14,
             @NotNull Boolean termsAgreed,
             /** 개인정보 처리방침 (필수). null·false 모두 AUTH_007 */
             Boolean privacyAgreed,

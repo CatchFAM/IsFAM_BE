@@ -36,9 +36,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * Phase 14 P-06 — 개인정보 처리방침 동의(privacy_agreed) 저장.
- *
- * <p>완료 기준: <b>가입 1건 → user_agreements 4건</b>, privacy 누락·거부 → AUTH_007.
+ * Phase 14 가입 게이트.
+ * <ul>
+ *   <li>P-06 — 개인정보 처리방침 동의(privacy_agreed) 저장. 누락·거부 → AUTH_007</li>
+ *   <li>P-08 — 만 14세 미만 차단(age_over_14). 누락·false → AUTH_010, 동의 검사보다 먼저</li>
+ * </ul>
+ * 완료 기준: <b>가입 1건 → user_agreements 5건</b>.
  */
 @ExtendWith(MockitoExtension.class)
 class AuthServiceSignupTest {
@@ -68,18 +71,19 @@ class AuthServiceSignupTest {
     // ── 저장 ───────────────────────────────────────────────
 
     @Test
-    void signupRecordsFourAgreementsIncludingPrivacy() {
+    void signupRecordsFiveAgreementsIncludingPrivacyAndAge() {
         givenSignupSucceeds();
 
-        service.signup(request(true, true, true, false));
+        service.signup(request(true, true, true, true, false));
 
         verify(userAgreementRepository).saveAll(agreementsCaptor.capture());
         List<UserAgreement> saved = agreementsCaptor.getValue();
 
-        assertThat(saved).hasSize(4);
+        assertThat(saved).hasSize(5);
         assertThat(saved)
                 .extracting(UserAgreement::getAgreementType, UserAgreement::isAgreed)
                 .containsExactly(
+                        tuple(UserAgreement.Type.AGE_OVER_14, true),
                         tuple(UserAgreement.Type.TERMS, true),
                         tuple(UserAgreement.Type.PRIVACY, true),
                         tuple(UserAgreement.Type.VOICE_PRINT, true),
@@ -93,39 +97,58 @@ class AuthServiceSignupTest {
                 });
     }
 
-    // ── 거부 ───────────────────────────────────────────────
+    // ── 14세 미만 (P-08) ────────────────────────────────────
+
+    @Test
+    void ageOver14FalseIsRejectedWithAuth010() {
+        assertRejectedBeforeAnything(request(false, true, true, true, true), ErrorCode.AUTH_010);
+    }
+
+    /** 필드를 모르는 구버전 앱 — 확인받지 못했으니 14세 미만과 같게 다룹니다 */
+    @Test
+    void ageOver14MissingIsRejectedWithAuth010() {
+        assertRejectedBeforeAnything(request(null, true, true, true, true), ErrorCode.AUTH_010);
+    }
+
+    /** 둘 다 걸리면 나이가 먼저 — 앱이 "약관 동의"가 아니라 "가입 불가"를 보여줘야 합니다 */
+    @Test
+    void ageIsCheckedBeforeConsents() {
+        assertRejectedBeforeAnything(request(false, false, false, false, false), ErrorCode.AUTH_010);
+    }
+
+    // ── 필수 동의 (P-06) ────────────────────────────────────
 
     @Test
     void privacyFalseIsRejectedWithAuth007() {
-        assertRejectedBeforeAnything(request(true, false, true, true));
+        assertRejectedBeforeAnything(request(true, true, false, true, true), ErrorCode.AUTH_007);
     }
 
     /** 필드를 모르는 구버전 앱 — COMMON_002 가 아니라 AUTH_007 이어야 합니다 */
     @Test
     void privacyMissingIsRejectedWithAuth007() {
-        assertRejectedBeforeAnything(request(true, null, true, true));
+        assertRejectedBeforeAnything(request(true, true, null, true, true), ErrorCode.AUTH_007);
     }
 
     @Test
     void termsFalseIsStillRejected() {
-        assertRejectedBeforeAnything(request(false, true, true, true));
+        assertRejectedBeforeAnything(request(true, false, true, true, true), ErrorCode.AUTH_007);
     }
 
     @Test
     void voicePrintFalseIsStillRejected() {
-        assertRejectedBeforeAnything(request(true, true, false, true));
+        assertRejectedBeforeAnything(request(true, true, true, false, true), ErrorCode.AUTH_007);
     }
 
     // ── 내부 ──────────────────────────────────────────────
 
     /**
-     * 동의 검사는 번호 인증 토큰 소비보다 먼저입니다 — 체크박스 하나 때문에
+     * 나이·동의 검사는 번호 인증 토큰 소비보다 먼저입니다 — 체크박스 하나 때문에
      * 인증번호를 다시 받게 만들지 않습니다. 계정·동의 이력도 남지 않아야 합니다.
      */
-    private void assertRejectedBeforeAnything(AuthDto.SignupRequest request) {
+    private void assertRejectedBeforeAnything(AuthDto.SignupRequest request, ErrorCode expected) {
         assertThatThrownBy(() -> service.signup(request))
                 .isInstanceOf(BusinessException.class)
-                .extracting("errorCode").isEqualTo(ErrorCode.AUTH_007);
+                .extracting("errorCode").isEqualTo(expected);
 
         verifyNoInteractions(phoneVerificationService, userAgreementRepository, refreshTokenRepository);
         verify(userRepository, never()).save(any());
@@ -148,10 +171,10 @@ class AuthServiceSignupTest {
                 new JwtTokenProvider.IssuedToken("access", "jti-a", NOW, NOW.plusSeconds(60)));
     }
 
-    private AuthDto.SignupRequest request(Boolean terms, Boolean privacy,
+    private AuthDto.SignupRequest request(Boolean ageOver14, Boolean terms, Boolean privacy,
                                           Boolean voicePrint, Boolean marketing) {
         return new AuthDto.SignupRequest(
                 "01012345678", "verification-token", "password1",
-                "홍길동", "길동", terms, privacy, voicePrint, marketing);
+                "홍길동", "길동", ageOver14, terms, privacy, voicePrint, marketing);
     }
 }
