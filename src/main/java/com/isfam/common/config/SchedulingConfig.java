@@ -62,7 +62,9 @@ public class SchedulingConfig {
      * {@code @Scheduled} 전용.
      *
      * <p>풀이 1이면 파기 점검(5분)과 tmpfs 스위퍼(10분)가 같은 분에 겹칠 때 한쪽이
-     * 밀립니다. 2로 둡니다 — Phase 13 의 일 1회 파기 배치가 들어오면 그때 다시 봅니다.
+     * 밀립니다. <b>Phase 13 에서 3으로 올렸습니다.</b> 보관기간 파기 배치(일 1회)는 밀린
+     * 분량이 있으면 몇 분씩 스레드를 잡습니다. 2였다면 그동안 파기 점검과 스위퍼가
+     * 한 스레드를 나눠 써야 하고, 감시가 밀리면 {@code PurgeMonitor} 가 stale 로 DOWN 이 됩니다.
      *
      * <p>에러 핸들러를 명시해 한 번의 실패가 다음 주기를 막지 않게 합니다.
      * 예외 메시지에는 요청 원문 조각이 섞일 수 있어 메시지를 포맷에 넣지 않고
@@ -72,7 +74,7 @@ public class SchedulingConfig {
     public ThreadPoolTaskScheduler taskScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
         scheduler.setThreadNamePrefix("isfam-sched-");
-        scheduler.setPoolSize(2);
+        scheduler.setPoolSize(3);
         scheduler.setWaitForTasksToCompleteOnShutdown(true);
         scheduler.setAwaitTerminationSeconds(20);
         scheduler.setErrorHandler(t ->

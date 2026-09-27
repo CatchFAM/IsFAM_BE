@@ -16,6 +16,7 @@ import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMemberAliasRepository;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
 import com.isfam.domain.notification.repository.NotificationRepository;
+import com.isfam.domain.retention.repository.RetiredAccessLogRepository;
 import com.isfam.domain.voice.entity.Voiceprint;
 import com.isfam.domain.voice.repository.VoiceprintRepository;
 import com.isfam.domain.voice.repository.VoiceprintSampleRepository;
@@ -55,11 +56,12 @@ import java.util.Set;
  *       올라갑니다</li>
  * </ul>
  *
- * <p><b>{@code spoof_checks} 는 지우지 않습니다.</b> 접속기록 보관 의무(고시 제8조, 2년)
- * 대상이라 탈퇴로 지울 수 없습니다. 대신 Phase 13 에서 탈퇴자 접속기록을 별도 스키마로
- * 옮기는 작업(P-04, 법 제21조 제3항)이 예정돼 있습니다. {@code call_events} 에 FK 를
- * 걸지 않은 것도 이 때문입니다 — 걸어두면 spoof_checks 가 call_events 를 붙잡아
- * ⑤에서 삭제가 실패합니다.
+ * <p><b>접속기록은 지우지 않고 옮깁니다</b> (Phase 13-4, P-04). {@code spoof_checks} 와
+ * {@code voiceprint_access_logs} 는 보관 의무(고시 제8조, 2년) 대상이라 탈퇴로 지울 수 없고,
+ * 법 제21조 제3항에 따라 서비스 데이터와 분리해야 합니다. ⑤-2 에서 {@code retired} 스키마로
+ * 옮깁니다. {@code embedding_access_logs} 는 한 row 에 여러 사람이 섞여 있어 옮기지 않습니다.
+ * {@code call_events} 에 FK 를 걸지 않은 이유도 여기 있습니다 — 걸어두면 spoof_checks 가
+ * call_events 를 붙잡아 ⑤에서 삭제가 실패합니다.
  *
  * <p><b>{@code user_agreements} 도 남깁니다.</b> 분쟁 대비 보관입니다(erd.md).
  * "동의를 받았다"는 사실은 탈퇴 후에도 증명해야 할 수 있습니다.
@@ -89,6 +91,7 @@ public class WithdrawalService {
     private final CallEventRepository callEventRepository;
     private final NotificationRepository notificationRepository;
     private final DeviceRepository deviceRepository;
+    private final RetiredAccessLogRepository retiredAccessLogRepository;
     private final VoiceprintAccessLogger voiceprintAccessLogger;
     private final DataDeletionLogger dataDeletionLogger;
     private final PasswordEncoder passwordEncoder;
@@ -189,6 +192,18 @@ public class WithdrawalService {
         // demo_sessions 는 아직 구현되지 않았습니다. 데모 기능을 붙이는 시점에
         // 여기에 삭제를 추가하세요 — 명세 ⑤ 에 포함된 테이블입니다.
 
+        // ── ⑤-2 접속기록 분리 이관 (Phase 13-4, P-04) ──────
+        // 지우지 않고 retired 스키마로 옮깁니다 — 보관 의무(2년)는 남고, 서비스 테이블에서는 빠집니다.
+        //
+        // 이 위치인 이유
+        //  - ③ 뒤: ③이 남긴 파기 기록(voiceprint_access_logs DESTROY)까지 함께 옮겨야 합니다
+        //  - ⑤ 뒤: voice_analyses 가 spoof_checks 를 참조하므로, 분석을 먼저 지워야 옮길 수 있습니다
+        //  - ⑥ 앞: spoof_checks.device_id 가 단말을 가리키므로 단말보다 먼저 빠지는 편이 안전합니다
+        //
+        // 옮기기지 파기가 아니므로 data_deletion_logs 에 넣지 않습니다. retired 쪽 retired_at 이 증빙입니다.
+        RetiredAccessLogRepository.Moved moved =
+                retiredAccessLogRepository.moveWithdrawnUser(userId, startedAt);
+
         // ── ⑥ 단말 삭제 ────────────────────────────────────
         // 여기서 push_token 이 사라지므로 ⑨의 푸시는 "남은 가족"에게만 나갑니다.
         deleted.put(DataDeletionLogger.Tables.DEVICES,
@@ -230,8 +245,8 @@ public class WithdrawalService {
 
         // 건수만 남깁니다. 어떤 사용자의 무엇이 지워졌는지는 userId 로 충분하고,
         // 이름·번호는 로그에 넣지 않습니다(P-24).
-        log.info("회원 탈퇴 완료 — userId={}, 파기 {}, syncTargets={}",
-                userId, deleted, syncTargets.size());
+        log.info("회원 탈퇴 완료 — userId={}, 파기 {}, 접속기록 이관 {}, syncTargets={}",
+                userId, deleted, moved, syncTargets.size());
     }
 
     // ── 내부 ────────────────────────────────────────────────
