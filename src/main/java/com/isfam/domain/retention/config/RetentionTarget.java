@@ -47,11 +47,24 @@ public enum RetentionTarget {
     SPOOF_CHECKS(Tables.SPOOF_CHECKS, "requested_at",
             "not exists (select 1 from voice_analyses va where va.spoof_check_id = t.id)", true),
 
+    /**
+     * 2년 — 탈퇴자의 {@code spoof_checks} (Phase 13-4, P-04).
+     * <b>기산점은 이관 시각이 아니라 원래 요청 시각</b>입니다 — 탈퇴했다고 보관기간이 늘어나지 않습니다.
+     * 기간은 {@code spoof-checks} 설정을 그대로 씁니다.
+     */
+    RETIRED_SPOOF_CHECKS(Tables.RETIRED_SPOOF_CHECKS, "requested_at", null, true),
+
     /** 2년 — 제3자 제공 이력 (고시 제8조) */
     EMBEDDING_ACCESS_LOGS(Tables.EMBEDDING_ACCESS_LOGS, "created_at", null, true),
 
     /** 2년 — 생체정보 수집·파기 이력 (고시 제8조) */
-    VOICEPRINT_ACCESS_LOGS(Tables.VOICEPRINT_ACCESS_LOGS, "created_at", null, true);
+    VOICEPRINT_ACCESS_LOGS(Tables.VOICEPRINT_ACCESS_LOGS, "created_at", null, true),
+
+    /**
+     * 2년 — 탈퇴자의 {@code voiceprint_access_logs} (Phase 13-4, P-04).
+     * 기산점은 원래 기록 시각, 기간은 {@code voiceprint-access-logs} 설정을 그대로 씁니다.
+     */
+    RETIRED_VOICEPRINT_ACCESS_LOGS(Tables.RETIRED_VOICEPRINT_ACCESS_LOGS, "created_at", null, true);
 
     private final String table;
     private final String cutoffColumn;

@@ -45,6 +45,18 @@ class RetentionPropertiesTest {
                 .forEach(target -> assertThat(props.daysFor(target)).isPositive());
     }
 
+    /** Phase 13-4 — 탈퇴자 분리 보관분은 원본과 같은 기간을 따라감 */
+    @Test
+    void retiredTablesFollowOriginalDays() {
+        RetentionProperties props = new RetentionProperties(null, null, null, null,
+                new RetentionProperties.Days(null, null, null, null, null, 1_095, null, 900));
+
+        assertThat(props.daysFor(RetentionTarget.RETIRED_SPOOF_CHECKS)).isEqualTo(1_095);
+        assertThat(props.daysFor(RetentionTarget.RETIRED_VOICEPRINT_ACCESS_LOGS)).isEqualTo(900);
+        assertThat(RetentionTarget.RETIRED_SPOOF_CHECKS.isAccessLog()).isTrue();
+        assertThat(RetentionTarget.RETIRED_VOICEPRINT_ACCESS_LOGS.isAccessLog()).isTrue();
+    }
+
     @Test
     void accessLogBelowLegalMinimumIsRejected() {
         assertThatThrownBy(() -> days(729))

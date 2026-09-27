@@ -56,6 +56,10 @@ public class DataDeletionLogger {
         public static final String EMBEDDING_ACCESS_LOGS = "embedding_access_logs";
         /** Phase 13 — 보관기간 배치 대상(2년) */
         public static final String VOICEPRINT_ACCESS_LOGS = "voiceprint_access_logs";
+        /** Phase 13-4 — 탈퇴자 접속기록 분리 보관(retired 스키마). 보관기간 배치 대상(2년) */
+        public static final String RETIRED_SPOOF_CHECKS = "retired.spoof_checks";
+        /** Phase 13-4 — 탈퇴자 접속기록 분리 보관(retired 스키마). 보관기간 배치 대상(2년) */
+        public static final String RETIRED_VOICEPRINT_ACCESS_LOGS = "retired.voiceprint_access_logs";
 
         private Tables() {
         }

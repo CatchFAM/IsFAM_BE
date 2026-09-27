@@ -126,7 +126,9 @@ public record RetentionProperties(
                     RetentionTarget.VOICE_ANALYSES, voiceAnalyses,
                     RetentionTarget.SPOOF_CHECKS, spoofChecks,
                     RetentionTarget.EMBEDDING_ACCESS_LOGS, embeddingAccessLogs,
-                    RetentionTarget.VOICEPRINT_ACCESS_LOGS, voiceprintAccessLogs));
+                    RetentionTarget.VOICEPRINT_ACCESS_LOGS, voiceprintAccessLogs,
+                    RetentionTarget.RETIRED_SPOOF_CHECKS, spoofChecks,
+                    RetentionTarget.RETIRED_VOICEPRINT_ACCESS_LOGS, voiceprintAccessLogs));
         }
 
         /**
@@ -144,6 +146,9 @@ public record RetentionProperties(
             map.put(RetentionTarget.SPOOF_CHECKS, spoofChecks);
             map.put(RetentionTarget.EMBEDDING_ACCESS_LOGS, embeddingAccessLogs);
             map.put(RetentionTarget.VOICEPRINT_ACCESS_LOGS, voiceprintAccessLogs);
+            // 탈퇴자 분리 보관분은 원본과 같은 기간 (Phase 13-4)
+            map.put(RetentionTarget.RETIRED_SPOOF_CHECKS, spoofChecks);
+            map.put(RetentionTarget.RETIRED_VOICEPRINT_ACCESS_LOGS, voiceprintAccessLogs);
             return map;
         }
 
