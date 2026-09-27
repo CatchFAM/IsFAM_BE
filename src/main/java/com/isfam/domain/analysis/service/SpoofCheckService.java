@@ -57,7 +57,7 @@ import java.util.Locale;
  * 다른 기록 테이블에 남긴 row 와 이어집니다. {@code operation}(고시 제8조의 "수행업무")은
  * 어느 팩토리를 쓰느냐로 정해지므로 여기서 따로 넘기지 않습니다.
  *
- * <p><b>260926 — 분석 서버 호출 실패도 기록합니다(P-20 재개).</b>
+ * <p><b>260926 — 수집 상한 35초 → 6초, 분석 서버 실패도 기록(P-20 재개).</b>
  */
 @Slf4j
 @Service
@@ -65,12 +65,34 @@ import java.util.Locale;
 public class SpoofCheckService {
 
     /**
-     * 현재 앱은 중앙 5초만 보내지만 구버전 호환을 위해 35초를 서버 상한으로 둡니다.
+     * 수집 상한 6초 — <b>모델 분석 길이 5초 + 경계 여유 1초</b>.
+     *
+     * <p>앱은 중앙 5초를 잘라 보내지만, 자르는 위치와 wav 인코딩에 따라 실제 파일이 5초를
+     * 조금 넘을 수 있습니다. 딱 5초로 두면 정상 요청이 거부됩니다. 여유를 1초로 제한하는 건
+     * 최소수집(법 제3조 제1항) 때문입니다 — 분석에 쓰이지 않는 구간은 수집 근거가 없습니다.
+     *
+     * <p>이전 값 35초는 "구버전 앱 호환" 명목이었으나 운영 배포 전이라 호환할 구버전이 없습니다.
      */
-    private static final double MAX_DURATION_SECONDS = 35.0;
+    private static final double MAX_DURATION_SECONDS = 6.0;
 
-    /** 30초 · 16kHz · mono · 16bit ≈ 960KB. 상한은 1.5MB */
-    private static final long MAX_AUDIO_BYTES = 1_572_864L;
+    /** 명세상 앱이 보내는 형식: 16kHz · mono · 16bit PCM (api-statement.md) */
+    private static final long BYTES_PER_SECOND = 16_000L * 2;
+
+    /** RIFF·fmt 헤더와 LIST 같은 부가 청크 몫 */
+    private static final long WAV_HEADER_ALLOWANCE = 4_096L;
+
+    /**
+     * 6초 × 32,000B + 4KB = 196,096B (약 192KB).
+     *
+     * <p><b>헤더를 믿지 않는 유일한 상한입니다.</b> 길이 검사는 WAV 헤더의 byteRate 로
+     * 계산하므로 헤더를 조작하면 짧은 것처럼 보이게 할 수 있습니다. 바이트 상한은 헤더와
+     * 무관하게 "16kHz mono 기준 6초 분량 이상은 받지 않는다"를 보장합니다.
+     *
+     * <p>44.1kHz·stereo 로 보내면 5초여도 여기서 거부됩니다. 명세가 16kHz mono 를
+     * 앱 책임으로 정하고 있어 의도한 동작입니다.
+     */
+    private static final long MAX_AUDIO_BYTES =
+            (long) (MAX_DURATION_SECONDS * BYTES_PER_SECOND) + WAV_HEADER_ALLOWANCE;
 
     /**
      * <b>wav 만 받습니다.</b> mp3·m4a 는 헤더만으로 길이를 구할 수 없어
@@ -342,7 +364,7 @@ public class SpoofCheckService {
         }
     }
 
-    /** ERD 의 audio_bytes 가 int 입니다. 상한이 1.5MB 라 넘칠 일은 없지만 방어합니다 */
+    /** ERD 의 audio_bytes 가 int 입니다. 상한이 약 192KB 라 넘칠 일은 없지만 방어합니다 */
     private Integer toIntBytes(long size) {
         return size > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) size;
     }

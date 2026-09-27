@@ -21,13 +21,14 @@ import org.springframework.web.multipart.MultipartFile;
  * 다른 곳에 오디오 업로드를 추가하려는 생각이 들면 legal-compliance.md 4장을 먼저 읽으세요 —
  * 암호화 전송 · 접속기록 · 즉시 파기 · 처리방침 네 가지 의무가 그 엔드포인트에도 붙습니다.
  *
- * <p>앱은 <b>음질 통과 구간 최대 30초</b>만 보냅니다. 통화 전체를 올리지 않습니다.
- * 서버가 16kHz mono 로 변환하므로 앱이 리샘플링할 필요는 없습니다.
+ * <p>앱은 <b>음질 통과 구간 중 중앙 5초</b>만 보냅니다. 통화 전체를 올리지 않습니다.
+ * 딥보이스 모델이 분석하는 길이가 5초이고, 그 이상은 수집 근거가 없습니다(법 제3조 제1항).
+ * 서버 상한은 경계 여유 1초를 더한 6초이고, 넘으면 판정을 거부하고 기록만 남깁니다.
+ *
+ * <p><b>형식은 16kHz · mono · 16bit wav 이고 변환은 앱 책임입니다</b>(api-statement.md).
+ * 바이트 상한(약 192KB)이 이 형식 기준이라, 44.1kHz·stereo 로 보내면 5초여도 거부됩니다.
  *
  * <p><b>IP 해석은 Phase 12 에서 {@link ClientIpResolver} 로 옮겼습니다</b>(P-16).
- * {@code embedding_access_logs} · {@code voiceprint_access_logs} 도 같은 "접속지" 항목을
- * 요구해서, 여기 private 메서드로 두면 세 벌이 됩니다. 프록시 설정이 바뀔 때 한 벌만
- * 고쳐지는 사고를 막으려고 공통으로 뺐습니다 — 동작은 그대로입니다.
  */
 @RestController
 @RequiredArgsConstructor

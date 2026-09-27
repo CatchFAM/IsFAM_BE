@@ -30,10 +30,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
- * 260926 — 분석 서버 실패 기록(P-20 재개).
+ * 260926 — 수집 상한 6초와 분석 서버 실패 기록(P-20 재개).
  *
  * <p>공통 불변식: <b>음성이 tmpfs 에 들어온 요청은 결과가 무엇이든 row 1건 + purged_at</b>.
  */
@@ -125,6 +126,38 @@ class SpoofCheckServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.COMMON_009);
         verify(audioTempStorage).purge(any());
+    }
+
+    // ── 6초 상한 ───────────────────────────────────────────
+
+    @Test
+    void headerDurationOverSixSecondsIsRejectedBeforeAnalysis() {
+        givenReceived(FIVE_SECONDS_BYTES, 6.1);
+
+        assertThatThrownBy(this::call)
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.VOICE_002);
+
+        verify(antiSpoofingClient, never()).detect(any());
+        SpoofCheck saved = captureSaved();
+        assertThat(saved.getRejectedReason()).isEqualTo(SpoofCheck.RejectedReason.DURATION_EXCEEDED);
+        assertThat(saved.getPurgedAt()).isEqualTo(PURGED_AT);
+    }
+
+    /** 헤더를 조작해 짧아 보이게 해도 바이트 상한에서 걸립니다 */
+    @Test
+    void sizeOverLimitIsRejectedWithoutReadingHeader() {
+        given(audioTempStorage.receive(any(), any()))
+                .willReturn(new AudioTempStorage.TempAudio(Path.of("x.wav"), 197_000L));
+
+        assertThatThrownBy(this::call)
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.VOICE_002);
+
+        verify(audioTempStorage, never()).probe(any());
+        verify(antiSpoofingClient, never()).detect(any());
+        assertThat(captureSaved().getRejectedReason())
+                .isEqualTo(SpoofCheck.RejectedReason.SIZE_EXCEEDED);
     }
 
     // ── 내부 ──────────────────────────────────────────────

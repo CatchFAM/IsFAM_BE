@@ -29,9 +29,10 @@ import java.time.Instant;
  *   <li>{@code purged_at} — 우리 서버(tmpfs) 원본을 지운 시각</li>
  *   <li>{@code remote_purged} — 분석 서버(FastAPI) 임시 파일 파기 여부 (P-23)</li>
  * </ul>
- * {@code purged_at} 만으로는 Java 쪽만 증명됩니다. FastAPI 의 {@code UploadFile} 은
- * 1MB 를 넘으면 디스크로 스풀되고 30초 오디오가 정확히 그 구간이라, 그쪽에도 통화
- * 음성이 남습니다. 두 값이 함께 있어야 "어디에도 안 남는다"고 말할 수 있습니다.
+ * {@code purged_at} 만으로는 Java 쪽만 증명됩니다. 두 값이 함께 있어야
+ * "어디에도 안 남는다"고 말할 수 있습니다. (상한이 6초·약 192KB 로 줄면서 FastAPI
+ * {@code UploadFile} 의 디스크 스풀 기준 1MB 아래로 내려갔습니다. 그쪽에서는 메모리에만
+ * 머물 가능성이 높지만, {@code purged} 가 무엇을 증명하는지는 FastAPI 와 합의 대기 중입니다.)
  * <pre>
  *   select count(*) from spoof_checks where purged_at is null;        -- 항상 0
  *   select count(*) from spoof_checks where remote_purged = false;    -- 항상 0
@@ -131,11 +132,11 @@ public class SpoofCheck {
 
     /** 판정을 거부한 이유. {@code analysisStatus == REJECTED} 일 때만 채웁니다 */
     public enum RejectedReason {
-        /** 상한(35초) 초과. WAV 헤더 계산값 또는 FastAPI 응답값 */
+        /** 상한(6초) 초과. WAV 헤더 계산값 또는 FastAPI 응답값 */
         DURATION_EXCEEDED,
         /** RIFF/WAVE 헤더를 읽을 수 없음. 앱이 wav 가 아닌 것을 보냈거나 파일이 깨짐 */
         INVALID_WAV_HEADER,
-        /** 업로드 상한(1.5MB) 초과 */
+        /** 업로드 상한(6초 · 16kHz mono 16bit 기준 약 192KB) 초과 */
         SIZE_EXCEEDED;
 
         @JsonValue

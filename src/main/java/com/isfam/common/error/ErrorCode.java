@@ -36,7 +36,7 @@ public enum ErrorCode {
 
     VOICE_001(HttpStatus.UNPROCESSABLE_ENTITY, "음질이 부족해요. 조용한 곳에서 다시 녹음해 주세요"),
     /**
-     * 통화 음성이 상한(35초·1.5MB)을 넘거나 WAV 헤더가 깨진 경우.
+     * 통화 음성이 상한(6초 · 16kHz mono 기준 약 192KB)을 넘거나 WAV 헤더가 깨진 경우.
      *
      * <p><b>재시도 금지 오류입니다.</b> 같은 파일을 다시 올려도 동일하게 거부되므로
      * 앱은 해당 call_event 를 {@code PUT /call-events} 로 failed 처리하고 종료해야 합니다.
