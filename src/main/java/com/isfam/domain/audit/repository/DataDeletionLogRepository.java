@@ -5,6 +5,7 @@ import org.springframework.data.repository.Repository;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * 파기 기록 조회·기록.
@@ -36,11 +37,11 @@ public interface DataDeletionLogRepository extends Repository<DataDeletionLog, L
     long countByStatusAndCreatedAtAfter(DataDeletionLog.Status status, Instant after);
 
     /**
-     * 배치가 <b>돌기는 했는지</b> 확인합니다.
+     * 기간 내 전체 파기 기록 건수.
      *
-     * <p>실패 건수만 보면 "배치가 아예 안 돌았다"를 놓칩니다 — 실패가 0건인 건
-     * 잘 돌았을 때와 죽었을 때가 똑같습니다. 지난 24시간에 row 가 하나도 없으면
-     * 그것도 이상 신호입니다(Phase 13 에서 이 판정을 붙입니다).
+     * <p>배치 감시에는 쓰지 않습니다. 탈퇴 기록도 함께 세므로, 배치가 멈춰도 탈퇴가 있으면
+     * 0 이 아니게 되어 정지를 가립니다. 감시는 {@link #findTopByTriggerTypeOrderByCreatedAtDesc}
+     * + {@link #countByTraceId} 를 씁니다(Phase 13-3).
      */
     long countByCreatedAtAfter(Instant after);
 
@@ -48,4 +49,20 @@ public interface DataDeletionLogRepository extends Repository<DataDeletionLog, L
 
     /** 같은 요청·같은 배치 실행에서 남은 기록을 한 덩어리로 모을 때 씁니다 */
     List<DataDeletionLog> findByTraceId(String traceId);
+
+    // ── Phase 13-3 추가 ─────────────────────────────────────
+
+    /**
+     * 가장 최근의 파기 기록 한 건 — 배치 감시({@code RetentionMonitor})가
+     * {@code RETENTION_BATCH} 로 부릅니다.
+     *
+     * <p>이 row 의 {@code trace_id} 가 곧 마지막 배치 실행입니다.
+     */
+    Optional<DataDeletionLog> findTopByTriggerTypeOrderByCreatedAtDesc(DataDeletionLog.TriggerType triggerType);
+
+    /**
+     * 한 번의 실행이 남긴 row 수. 배치는 대상 테이블마다 1행(성공이든 실패든)을 남기므로,
+     * 대상 수보다 적으면 실행 도중 기록이 빠진 것입니다.
+     */
+    long countByTraceId(String traceId);
 }
