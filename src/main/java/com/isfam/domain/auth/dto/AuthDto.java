@@ -26,6 +26,11 @@ public final class AuthDto {
     /**
      * <b>필수 동의는 @AssertTrue 대신 서비스에서 검사합니다.</b>
      * 검증 어노테이션으로 막으면 COMMON_002(422)가 나가는데, 명세는 AUTH_007 을 요구합니다.
+     *
+     * <p><b>{@code privacyAgreed} 에는 {@code @NotNull} 을 걸지 않았습니다</b> (Phase 14, P-06).
+     * 이 필드를 모르는 앱 빌드는 값을 보내지 않는데, {@code @NotNull} 이면 그 요청이
+     * COMMON_002 "입력값을 확인해 주세요"로 떨어져 무엇이 빠졌는지 알 수 없습니다.
+     * 누락도 "처리방침 동의를 받지 못한 상태"라 AUTH_007 로 내보내는 편이 명세와 맞습니다.
      */
     public record SignupRequest(
             @NotBlank(message = "휴대폰 번호를 입력해 주세요")
@@ -48,6 +53,8 @@ public final class AuthDto {
             String displayName,
 
             @NotNull Boolean termsAgreed,
+            /** 개인정보 처리방침 (필수). null·false 모두 AUTH_007 */
+            Boolean privacyAgreed,
             @NotNull Boolean voicePrintAgreed,
             @NotNull Boolean marketingAgreed
     ) {

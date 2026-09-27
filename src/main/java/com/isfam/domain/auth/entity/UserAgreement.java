@@ -31,13 +31,17 @@ public class UserAgreement {
     /**
      * 동의 항목. 법 제23조상 민감정보 처리와 제3자 제공은 별도 항목이어야 합니다.
      *
-     * <p>PRIVACY 는 아직 수집 경로가 없습니다 — POST /auth/signup 입력에
-     * privacy_agreed 필드가 없어서입니다. 명세 확정되면 SignupRequest 에 추가하세요.
+     * <p>가입 시 4종이 한꺼번에 기록됩니다(AuthService.saveAgreements).
+     *
+     * <p><b>값을 추가할 때는 DB 제약도 함께 고치세요.</b> Hibernate 가 테이블을 만들 때
+     * {@code agreement_type} 에 {@code CHECK (... IN (...))} 를 붙이고,
+     * {@code ddl-auto=update} 는 값이 늘어도 그 제약을 고치지 않습니다 —
+     * 새 값의 INSERT 가 제약 위반으로 실패합니다(db/phase13-0.sql 과 같은 이유).
      */
     public enum Type {
         /** 이용약관 (필수) */
         TERMS,
-        /** 개인정보 처리방침 (필수) — 현재 미수집 */
+        /** 개인정보 처리방침 (필수) — Phase 14 P-06 부터 가입 시 기록 */
         PRIVACY,
         /** 음성 민감정보 처리 (필수) — 내 음성을 특징값으로 변환 */
         VOICE_PRINT,

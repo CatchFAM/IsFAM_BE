@@ -50,13 +50,18 @@ public class AuthService {
      * 가입. phone_verification_token 을 여기서 소비합니다(1회용).
      *
      * <p>실패해서 재시도하면 번호 인증부터 다시 해야 합니다 — 토큰이 이미 폐기됐기 때문입니다.
+     *
+     * <p><b>필수 동의 검사가 토큰 소비보다 먼저입니다.</b> 동의가 빠진 요청으로 토큰을
+     * 태워버리면, 사용자는 체크박스 하나 때문에 인증번호를 다시 받아야 합니다.
      */
     @Transactional
     public AuthDto.TokenResponse signup(AuthDto.SignupRequest request) {
         Instant now = clock.instant();
 
         // 필수 동의는 검증 어노테이션이 아니라 여기서 봅니다 — 명세가 AUTH_007 을 요구
+        // 필수 3종: 이용약관 · 개인정보 처리방침(P-06) · 음성 민감정보 처리
         if (!Boolean.TRUE.equals(request.termsAgreed())
+                || !Boolean.TRUE.equals(request.privacyAgreed())
                 || !Boolean.TRUE.equals(request.voicePrintAgreed())) {
             throw new BusinessException(ErrorCode.AUTH_007);
         }
@@ -84,12 +89,16 @@ public class AuthService {
     /**
      * 동의 이력 저장. 시각과 약관 버전을 함께 남깁니다(legal-compliance.md 8장).
      *
-     * <p>PRIVACY 는 signup 입력에 필드가 없어 기록하지 않습니다. 앱과 합의되면 추가하세요.
+     * <p>가입 1건 = 4행입니다. 필수 3종은 위에서 true 가 확인됐으므로 항상 agreed=true 이고,
+     * 마케팅(선택)만 false 로 남을 수 있습니다. <b>거부한 선택 동의도 행을 남깁니다</b> —
+     * "묻지 않았다"와 "물었는데 거부했다"를 구분해야 하기 때문입니다(L5 항목별 동의).
      */
     private void saveAgreements(Long userId, AuthDto.SignupRequest request, Instant now) {
         userAgreementRepository.saveAll(List.of(
                 UserAgreement.of(userId, UserAgreement.Type.TERMS,
                         request.termsAgreed(), AGREEMENT_VERSION, now),
+                UserAgreement.of(userId, UserAgreement.Type.PRIVACY,
+                        request.privacyAgreed(), AGREEMENT_VERSION, now),
                 UserAgreement.of(userId, UserAgreement.Type.VOICE_PRINT,
                         request.voicePrintAgreed(), AGREEMENT_VERSION, now),
                 UserAgreement.of(userId, UserAgreement.Type.MARKETING,
