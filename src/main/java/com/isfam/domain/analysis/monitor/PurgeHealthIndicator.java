@@ -14,8 +14,12 @@ import org.springframework.stereotype.Component;
  *
  * <pre>
  *   GET /actuator/health   →  503 {"status":"DOWN"}
- *       ← purged_at IS NULL 또는 remote_purged = false 가 0 이 아님
+ *       ← 최근 24시간(isfam.compliance.purge-alert-window) 안에
+ *         purged_at IS NULL 또는 remote_purged = false 가 0 이 아님
  * </pre>
+ *
+ * <p><b>최근 기간만 봅니다</b> (260927). 전체를 보면 실패 1건에 보관 기간 내내 DOWN 이
+ * 유지돼 새 실패를 구별할 수 없습니다. 기간 계산은 {@link PurgeMonitor} 가 합니다.
  *
  * <p><b>세부 정보는 내보내지 않습니다.</b>
  * {@code management.endpoint.health.show-details=never} 로 잠가 두었습니다 —
@@ -59,6 +63,7 @@ public class PurgeHealthIndicator implements HealthIndicator {
         Health.Builder builder = snapshot.isHealthy() ? Health.up() : Health.down();
 
         return builder
+                .withDetail("window", snapshot.window().toString())
                 .withDetail("unpurged", snapshot.unpurged())
                 .withDetail("remoteUnpurged", snapshot.remoteUnpurged())
                 .withDetail("checkedAt", snapshot.checkedAt().toString())

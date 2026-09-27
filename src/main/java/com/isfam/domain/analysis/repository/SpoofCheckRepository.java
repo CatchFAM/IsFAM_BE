@@ -3,6 +3,7 @@ package com.isfam.domain.analysis.repository;
 import com.isfam.domain.analysis.entity.SpoofCheck;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -27,43 +28,33 @@ public interface SpoofCheckRepository extends JpaRepository<SpoofCheck, Long> {
     List<SpoofCheck> findByIdIn(Collection<Long> ids);
 
     /**
-     * 파기 누락 감시용 — <b>우리 서버(tmpfs)</b>.
+     * 파기 누락 전체 건수 — <b>우리 서버(tmpfs)</b>.
      *
-     * <p><b>이 값은 항상 0 이어야 합니다.</b> 0 이 아니면 오디오 원본이 tmpfs 에 남아 있을 수
-     * 있다는 뜻이고, legal-compliance.md 4장 ③ 위반입니다.
-     *
-     * <p>Phase 11 부터 {@code PurgeMonitor} 가 5분 주기로 호출하고,
-     * {@code PurgeHealthIndicator} 가 {@code /actuator/health} 에 노출합니다(P-21).
+     * <p>감시({@code PurgeMonitor})는 이 메서드가 아니라 아래 기간 버전을 씁니다.
+     * 이 테이블은 row 를 고치지 않으므로 전체 건수는 한 번 1 이 되면 보관 기간 내내
+     * 줄지 않습니다. 조사·점검용으로 남겨 둡니다.
      */
     long countByPurgedAtIsNull();
 
     /**
-     * 파기 누락 감시용 — <b>분석 서버(FastAPI)</b> (P-23).
+     * 파기 누락 전체 건수 — <b>분석 서버(FastAPI)</b> (P-23).
      *
      * <p>{@code remote_purged = false} 인 건수입니다. <b>null 은 세지 않습니다</b> —
-     * null 은 "분석 서버에 보낸 적 없음"(사전 거부) 또는 "아직 플래그를 안 보내는
-     * 버전"이라 파기 실패와 성격이 다릅니다. 파생 쿼리 {@code IsFalse} 가
+     * null 은 "분석 서버에 보낸 적 없음"(사전 거부)·"아직 플래그를 안 보내는 버전"·
+     * "응답을 못 받음"(failed)이라 파기 실패와 성격이 다릅니다. 파생 쿼리 {@code IsFalse} 가
      * {@code = false} 로 번역되어 SQL 의 3값 논리상 null 이 자동으로 빠집니다.
      */
     long countByRemotePurgedIsFalse();
 
-    // ── Phase 12 추가 ───────────────────────────────────────
-
     /**
-     * 같은 요청에서 남은 기록을 모을 때 씁니다.
+     * 최근 파기 누락 건수 — <b>우리 서버(tmpfs)</b>. {@code PurgeMonitor} 가 5분마다 부릅니다.
      *
-     * <p>사고 조사에서 하나의 요청이 네 기록 테이블에 남긴 row 를 한 번에 꺼내는 경로입니다 —
-     * {@code embedding_access_logs} · {@code voiceprint_access_logs} ·
-     * {@code data_deletion_logs} 에도 같은 이름의 조회가 있습니다.
+     * <p><b>기간을 거는 이유.</b> 파기 실패 row 는 접속기록이라 고치지도 지우지도 않습니다.
+     * 전체를 세면 실패 1건이 2년 내내 알람과 헬스체크 DOWN 을 유지해, 그 뒤에 새로 생긴
+     * 실패를 알아챌 수 없습니다. {@code requested_at} 이 {@code since} 이후인 것만 셉니다.
      */
-    List<SpoofCheck> findByTraceId(String traceId);
+    long countByPurgedAtIsNullAndRequestedAtGreaterThanEqual(Instant since);
 
-    /**
-     * 수행업무별 집계 (고시 제8조).
-     *
-     * <p>{@code REJECT} 건수는 인프라 설계 계획의 대시보드 지표 "35초 초과 거부"와
-     * 같은 값입니다. {@code analysis_status = 'REJECTED'} 로도 같은 수가 나오는데,
-     * 둘이 어긋날 수 없도록 DB CHECK 제약으로 묶어두었습니다.
-     */
-    long countByOperation(SpoofCheck.Operation operation);
+    /** 최근 파기 누락 건수 — <b>분석 서버(FastAPI)</b>. 기간을 거는 이유는 위와 같습니다 */
+    long countByRemotePurgedIsFalseAndRequestedAtGreaterThanEqual(Instant since);
 }
