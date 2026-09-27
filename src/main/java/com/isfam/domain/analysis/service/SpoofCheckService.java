@@ -31,7 +31,7 @@ import java.util.Locale;
  *
  * <pre>
  *   ① 암호화 전송   → TLS (AnalysisEndpointGuard 가 기동 시 검사)
- *   ② 접속기록      → spoof_checks row 저장. 거부한 요청도 남깁니다
+ *   ② 접속기록      → spoof_checks row 저장. 거부한 요청도, 분석 서버 호출이 실패한 요청도 남깁니다
  *   ③ 즉시 파기      → tmpfs 수신 후 finally 에서 삭제 · purged_at 기록
  *                     + 분석 서버 임시 파일은 remote_purged 로 (Phase 11 · P-23)
  *   ④ 처리방침      → 문서 (Phase 15)
@@ -56,6 +56,8 @@ import java.util.Locale;
  * <p><b>Phase 12 — 저장하는 row 에 {@code trace_id} 가 붙습니다.</b> 같은 요청이
  * 다른 기록 테이블에 남긴 row 와 이어집니다. {@code operation}(고시 제8조의 "수행업무")은
  * 어느 팩토리를 쓰느냐로 정해지므로 여기서 따로 넘기지 않습니다.
+ *
+ * <p><b>260926 — 분석 서버 호출 실패도 기록합니다(P-20 재개).</b>
  */
 @Slf4j
 @Service
@@ -90,8 +92,8 @@ public class SpoofCheckService {
      * 남의 통화 이벤트에 음성을 올릴 수 있으면, 그건 남의 이름으로 접속기록을
      * 남기는 것과 같습니다.
      *
-     * <p><b>거부할 때도 파기와 기록이 먼저입니다.</b> 순서가 뒤집히면 "상한을 넘는
-     * 음성이 들어왔다"는 사실이 기록에 남지 않아, 통제를 만든 의미가 없어집니다.
+     * <p><b>거부할 때도, 실패할 때도 파기와 기록이 먼저입니다.</b> 순서가 뒤집히면
+     * "음성이 들어왔다"는 사실이 기록에 남지 않아 통제를 만든 의미가 없어집니다.
      *
      * @param clientIp 접속기록 항목. 컨트롤러가 프록시 헤더까지 고려해 뽑아 넘깁니다
      */
@@ -111,6 +113,7 @@ public class SpoofCheckService {
         AudioTempStorage.TempAudio audio = null;
         AntiSpoofingResponse result = null;
         SpoofCheck.RejectedReason rejection = null;
+        RuntimeException failure = null;
         Double duration = null;
         Instant purgedAt;
 
@@ -125,18 +128,30 @@ public class SpoofCheckService {
 
                 if (!probe.valid()) {
                     rejection = SpoofCheck.RejectedReason.INVALID_WAV_HEADER;
-                } else if (probe.durationSeconds() > MAX_DURATION_SECONDS) {
+                } else if (exceedsDuration(probe.durationSeconds())) {
                     rejection = SpoofCheck.RejectedReason.DURATION_EXCEEDED;
                 } else {
-                    result = antiSpoofingClient.detect(audio);
+                    /*
+                     * 여기서 예외를 바로 던지면 안 됩니다(P-20 재개).
+                     * 음성은 이미 서버에 들어왔고 분석 서버로도 나갔는데, 예외가 그대로
+                     * 올라가면 spoof_checks row 가 생기지 않습니다 — S1-d 와 같은 구조입니다.
+                     * 잡아 두었다가 파기·기록을 마친 뒤 다시 던집니다.
+                     */
+                    try {
+                        result = antiSpoofingClient.detect(audio);
+                    } catch (RuntimeException e) {
+                        failure = e;
+                    }
 
-                    // 사후 확인 — 헤더가 실제 데이터와 다를 수 있습니다
-                    Double reported = result.audioQuality() == null
-                            ? null : result.audioQuality().durationSeconds();
-                    if (reported != null) {
-                        duration = reported;
-                        if (reported > MAX_DURATION_SECONDS) {
-                            rejection = SpoofCheck.RejectedReason.DURATION_EXCEEDED;
+                    if (result != null) {
+                        // 사후 확인 — 헤더가 실제 데이터와 다를 수 있습니다
+                        Double reported = result.audioQuality() == null
+                                ? null : result.audioQuality().durationSeconds();
+                        if (reported != null) {
+                            duration = reported;
+                            if (exceedsDuration(reported)) {
+                                rejection = SpoofCheck.RejectedReason.DURATION_EXCEEDED;
+                            }
                         }
                     }
                 }
@@ -147,6 +162,12 @@ public class SpoofCheckService {
         }
 
         Integer audioBytes = toIntBytes(audio == null ? 0 : audio.sizeBytes());
+
+        if (failure != null) {
+            recordFailure(failure, traceId, userId, callEvent.getId(), deviceId,
+                    duration, audioBytes, clientIp, requestedAt, purgedAt);
+            throw failure;
+        }
 
         /*
          * 분석 서버까지 간 요청만 원격 파기 값을 가집니다(P-23).
@@ -196,6 +217,49 @@ public class SpoofCheckService {
     }
 
     // ── 내부 ────────────────────────────────────────────────
+
+    private boolean exceedsDuration(double seconds) {
+        return seconds > MAX_DURATION_SECONDS;
+    }
+
+    /**
+     * 분석 서버 호출 실패를 {@code FAILED} row 로 남깁니다.
+     *
+     * <p><b>이 저장이 실패해도 원래 예외를 삼키지 않습니다.</b> 앱은 원래 오류(502 등)를
+     * 받아야 재시도 여부를 판단할 수 있습니다. 대신 저장 실패는 ERROR 로 남기는데,
+     * <b>예외 메시지와 스택은 찍지 않습니다</b> — PostgreSQL 제약 위반 메시지에는
+     * "Failing row contains (...)" 로 행 전체(client_ip 포함)가 들어갑니다(P-24).
+     */
+    private void recordFailure(RuntimeException failure, String traceId, Long userId,
+                               Long callEventId, Long deviceId, Double duration,
+                               Integer audioBytes, String clientIp, Instant requestedAt,
+                               Instant purgedAt) {
+        String failureType = failureTypeOf(failure);
+        try {
+            SpoofCheck saved = spoofCheckRepository.save(SpoofCheck.failed(
+                    traceId, userId, callEventId, deviceId, failureType,
+                    duration, audioBytes, clientIp, requestedAt, purgedAt));
+
+            warnIfNotPurged(purgedAt, saved.getId(), callEventId);
+            log.warn("딥보이스 판정 실패 — spoofCheckId={}, failureType={}, duration={}, bytes={}",
+                    saved.getId(), failureType, duration, audioBytes);
+        } catch (RuntimeException saveError) {
+            log.error("!!! 판정 실패 기록을 저장하지 못했습니다 — traceId={}, callEventId={}, "
+                            + "failureType={}, saveError={}",
+                    traceId, callEventId, failureType, saveError.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * {@code failure_type} 값. 에러 코드 이름이나 예외 클래스 단순명만 씁니다.
+     * {@code getMessage()} 는 넣지 않습니다 — {@code data_deletion_logs.failure_type} 과 같은 규칙.
+     */
+    private String failureTypeOf(RuntimeException failure) {
+        if (failure instanceof BusinessException be) {
+            return be.getErrorCode().name();
+        }
+        return failure.getClass().getSimpleName();
+    }
 
     /**
      * MDC 에 trace id 가 없으면 새로 만듭니다.
