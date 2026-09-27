@@ -52,6 +52,10 @@ public class DataDeletionLogger {
         public static final String REFRESH_TOKENS = "refresh_tokens";
         public static final String SPOOF_CHECKS = "spoof_checks";
         public static final String DEMO_SESSIONS = "demo_sessions";
+        /** Phase 13 — 보관기간 배치 대상(2년) */
+        public static final String EMBEDDING_ACCESS_LOGS = "embedding_access_logs";
+        /** Phase 13 — 보관기간 배치 대상(2년) */
+        public static final String VOICEPRINT_ACCESS_LOGS = "voiceprint_access_logs";
 
         private Tables() {
         }
