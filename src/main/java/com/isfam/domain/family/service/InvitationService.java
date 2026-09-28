@@ -3,6 +3,8 @@ package com.isfam.domain.family.service;
 import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
 import com.isfam.domain.auth.entity.User;
+import com.isfam.domain.auth.entity.UserAgreement;
+import com.isfam.domain.auth.repository.UserAgreementRepository;
 import com.isfam.domain.auth.repository.UserRepository;
 import com.isfam.domain.family.dto.InvitationDto;
 import com.isfam.domain.family.entity.Family;
@@ -39,6 +41,12 @@ import java.util.Set;
  * "초대 화면 진입 시 POST 호출"을 자주 틀리는 지점으로 꼽습니다. 화면을 열 때마다 회전하면
  * 방금 카톡으로 보낸 링크가 죽어서, 받는 쪽에는 "만료된 초대예요"만 뜹니다.
  * 서버가 막을 수 있는 실수는 아니라 문서와 주석으로 계속 표시해 둡니다.
+ *
+ * <p><b>Phase 14 — 음성 제3자 제공 동의를 이력으로 남깁니다</b>(P-07).
+ * 동의가 들어오는 곳은 이 클래스의 두 지점뿐입니다 — 초대 수락({@link #accept})과
+ * owner 의 링크 발급({@link #issueInviteCode}). 전에는 {@code family_memberships} 에 시각
+ * 하나만 남아 "어떤 문구에 동의했나"를 답할 수 없었습니다(L5-e). 제3자 제공은 분쟁 가능성이
+ * 가장 높은 동의라, 가입 동의와 같은 모양으로 {@code user_agreements} 에 버전과 함께 기록합니다.
  */
 @Slf4j
 @Service
@@ -47,9 +55,17 @@ public class InvitationService {
 
     private static final FamilyMembership.Status ACTIVE = FamilyMembership.Status.ACTIVE;
 
+    /**
+     * 음성 제3자 제공 동의 문구 버전. <b>동의 화면 문구가 바뀌면 올리세요.</b>
+     * 가입 약관 버전(AuthService)과 따로 두는 이유는 이 문구만 따로 바뀔 수 있어서입니다 —
+     * 예를 들어 "현재 및 향후 구성원"(P-02) 반영처럼.
+     */
+    private static final String VOICE_SHARING_AGREEMENT_VERSION = "v1.0";
+
     private final FamilyRepository familyRepository;
     private final FamilyMembershipRepository membershipRepository;
     private final UserRepository userRepository;
+    private final UserAgreementRepository userAgreementRepository;
     private final InviteCodeGenerator inviteCodeGenerator;
     private final NotificationService notificationService;
     private final ApplicationEventPublisher eventPublisher;
@@ -112,9 +128,13 @@ public class InvitationService {
         // [명세 확장] 링크를 만드는 사람의 제3자 제공 동의. 보내지 않으면 아무것도 기록하지 않습니다.
         // 공간 생성자(owner)가 동의를 남길 수 있는 유일한 지점입니다 — 자세한 배경은
         // FamilyMembership.voiceSharingConsentedAt 주석 참고.
+        //
+        // 이미 동의한 상태면 이력도 다시 남기지 않습니다. 링크를 돌릴 때마다 true 가 오는데,
+        // 그때마다 행이 쌓이면 "실제로 동의를 받은 시점"이 묻힙니다.
         if (Boolean.TRUE.equals(voiceSharingConsent)
                 && myMembership.getVoiceSharingConsentedAt() == null) {
             myMembership.consentVoiceSharing(now);
+            recordVoiceSharingConsent(userId, now);
         }
 
         return toInviteCodeResponse(family);
@@ -229,6 +249,12 @@ public class InvitationService {
             throw new BusinessException(ErrorCode.FAMILY_004);
         }
 
+        // ── 동의 이력 (P-07) ─────────────────────────────────
+        // 멤버십이 확정된 뒤에 남깁니다. 앞에서 남기면 FAMILY_004 경합으로 수락이 실패해도
+        // (같은 트랜잭션이라 롤백되긴 하지만) 읽는 사람이 순서를 오해합니다.
+        // 게이팅 값(membership.voiceSharingConsentedAt)과 같은 시각 now 입니다 — 두 기록이 어긋나지 않게.
+        recordVoiceSharingConsent(userId, now);
+
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.AUTH_009));
 
@@ -265,6 +291,20 @@ public class InvitationService {
     }
 
     // ── 내부 ────────────────────────────────────────────────
+
+    /**
+     * 음성 제3자 제공 동의 1행 (P-07). 호출하는 트랜잭션에 함께 묶입니다 —
+     * 기록이 실패하면 동의(게이팅 값)도 롤백되어, 기록 없는 동의 상태가 생기지 않습니다.
+     *
+     * <p>거부(false)는 남기지 않습니다. 수락에서는 거부하면 INVITE_003 으로 트랜잭션 전체가
+     * 롤백되고, 링크 발급에서는 동의 없이도 발급은 진행되는 선택 입력이라 "물었다"는 사실이
+     * 서버에서 확정되지 않습니다.
+     */
+    private void recordVoiceSharingConsent(Long userId, Instant now) {
+        userAgreementRepository.save(UserAgreement.of(
+                userId, UserAgreement.Type.VOICE_SHARING, true,
+                VOICE_SHARING_AGREEMENT_VERSION, now));
+    }
 
     /** 방금 들어온 본인까지 포함한 active 멤버 전원 */
     private Set<Long> collectSyncTargets(Long familyId) {

@@ -31,18 +31,36 @@ public class UserAgreement {
     /**
      * 동의 항목. 법 제23조상 민감정보 처리와 제3자 제공은 별도 항목이어야 합니다.
      *
-     * <p>PRIVACY 는 아직 수집 경로가 없습니다 — POST /auth/signup 입력에
-     * privacy_agreed 필드가 없어서입니다. 명세 확정되면 SignupRequest 에 추가하세요.
+     * <p>가입 시 5종이 한꺼번에 기록됩니다(AuthService.saveAgreements).
+     * {@code VOICE_SHARING} 만 가입이 아니라 가족 공간 참여 시점에 따로 기록됩니다(InvitationService).
+     *
+     * <p><b>값을 추가할 때는 DB 제약도 함께 고치세요.</b> Hibernate 가 테이블을 만들 때
+     * {@code agreement_type} 에 {@code CHECK (... IN (...))} 를 붙이고,
+     * {@code ddl-auto=update} 는 값이 늘어도 그 제약을 고치지 않습니다 —
+     * 새 값의 INSERT 가 제약 위반으로 실패합니다(db/phase13-0.sql 과 같은 이유).
+     * 현재 정의: db/phase14-3.sql
      */
     public enum Type {
+        /** 만 14세 이상 확인 (필수) — 동의가 아니라 확인. 생년월일 대신 이 사실만 남깁니다 (P-08) */
+        AGE_OVER_14,
         /** 이용약관 (필수) */
         TERMS,
-        /** 개인정보 처리방침 (필수) — 현재 미수집 */
+        /** 개인정보 처리방침 (필수) — Phase 14 P-06 부터 가입 시 기록 */
         PRIVACY,
         /** 음성 민감정보 처리 (필수) — 내 음성을 특징값으로 변환 */
         VOICE_PRINT,
         /** 마케팅 수신 (선택) */
-        MARKETING
+        MARKETING,
+        /**
+         * 음성 제3자 제공 (공간 참여 시 필수) — 내 임베딩이 가족 기기로 복제되는 것 (P-07).
+         *
+         * <p>한 사람에게 여러 행이 생길 수 있습니다 — 공간을 나갔다 다시 들어오면 새로 동의받고
+         * 새로 기록합니다(지난번 동의로 이번 제공이 커버되지 않음, FamilyMembership.rejoin).
+         *
+         * <p>{@code family_memberships.voice_sharing_consented_at} 은 배포 게이팅용으로 그대로 둡니다.
+         * 그 컬럼은 "지금 동의 상태인가"를, 이 행은 "언제 어떤 문구에 동의했나"를 답합니다.
+         */
+        VOICE_SHARING
     }
 
     @Id

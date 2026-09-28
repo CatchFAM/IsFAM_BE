@@ -50,13 +50,27 @@ public class AuthService {
      * 가입. phone_verification_token 을 여기서 소비합니다(1회용).
      *
      * <p>실패해서 재시도하면 번호 인증부터 다시 해야 합니다 — 토큰이 이미 폐기됐기 때문입니다.
+     *
+     * <p><b>필수 동의 검사가 토큰 소비보다 먼저입니다.</b> 동의가 빠진 요청으로 토큰을
+     * 태워버리면, 사용자는 체크박스 하나 때문에 인증번호를 다시 받아야 합니다.
+     *
+     * <p><b>나이 확인이 동의 검사보다도 먼저입니다</b> (Phase 14, P-08). 만 14세 미만이면
+     * 법정대리인 동의 없이 받은 본인 동의가 효력이 없습니다(법 제22조의2) — 동의를 따지기
+     * 전에 걸러야 앱도 "약관 동의" 대신 "가입할 수 없어요"를 보여줄 수 있습니다.
      */
     @Transactional
     public AuthDto.TokenResponse signup(AuthDto.SignupRequest request) {
         Instant now = clock.instant();
 
+        // 만 14세 미만 가입 차단. 누락도 확인받지 못한 것이라 같게 다룹니다
+        if (!Boolean.TRUE.equals(request.ageOver14())) {
+            throw new BusinessException(ErrorCode.AUTH_010);
+        }
+
         // 필수 동의는 검증 어노테이션이 아니라 여기서 봅니다 — 명세가 AUTH_007 을 요구
+        // 필수 3종: 이용약관 · 개인정보 처리방침(P-06) · 음성 민감정보 처리
         if (!Boolean.TRUE.equals(request.termsAgreed())
+                || !Boolean.TRUE.equals(request.privacyAgreed())
                 || !Boolean.TRUE.equals(request.voicePrintAgreed())) {
             throw new BusinessException(ErrorCode.AUTH_007);
         }
@@ -84,12 +98,22 @@ public class AuthService {
     /**
      * 동의 이력 저장. 시각과 약관 버전을 함께 남깁니다(legal-compliance.md 8장).
      *
-     * <p>PRIVACY 는 signup 입력에 필드가 없어 기록하지 않습니다. 앱과 합의되면 추가하세요.
+     * <p>가입 1건 = 5행입니다. 필수 3종과 나이 확인은 위에서 true 가 확인됐으므로 항상
+     * agreed=true 이고, 마케팅(선택)만 false 로 남을 수 있습니다. <b>거부한 선택 동의도 행을 남깁니다</b> —
+     * "묻지 않았다"와 "물었는데 거부했다"를 구분해야 하기 때문입니다(L5 항목별 동의).
+     *
+     * <p>나이 확인(AGE_OVER_14)은 동의가 아니라 확인이지만 같은 테이블에 둡니다. 시각·문구 버전이
+     * 함께 남고, 탈퇴 후에도 분쟁 대비로 보관되는 성격이 동의 이력과 같습니다 —
+     * "14세 미만을 받지 않았다"는 증명이 여기서 나옵니다.
      */
     private void saveAgreements(Long userId, AuthDto.SignupRequest request, Instant now) {
         userAgreementRepository.saveAll(List.of(
+                UserAgreement.of(userId, UserAgreement.Type.AGE_OVER_14,
+                        request.ageOver14(), AGREEMENT_VERSION, now),
                 UserAgreement.of(userId, UserAgreement.Type.TERMS,
                         request.termsAgreed(), AGREEMENT_VERSION, now),
+                UserAgreement.of(userId, UserAgreement.Type.PRIVACY,
+                        request.privacyAgreed(), AGREEMENT_VERSION, now),
                 UserAgreement.of(userId, UserAgreement.Type.VOICE_PRINT,
                         request.voicePrintAgreed(), AGREEMENT_VERSION, now),
                 UserAgreement.of(userId, UserAgreement.Type.MARKETING,

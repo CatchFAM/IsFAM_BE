@@ -21,6 +21,13 @@ public enum ErrorCode {
     AUTH_007(HttpStatus.UNPROCESSABLE_ENTITY, "필수 약관에 동의해 주세요"),
     AUTH_008(HttpStatus.UNAUTHORIZED, "비밀번호가 맞지 않아요"),
     AUTH_009(HttpStatus.UNAUTHORIZED, "로그인이 필요해요"), // [확장] access_token 누락·만료·위변조
+    /**
+     * 만 14세 미만 가입 차단 (Phase 14, P-08). {@code age_over_14} 누락·false.
+     *
+     * <p>AUTH_007(약관 미동의)과 나눈 이유 — 약관은 체크하면 통과하지만 이건 재시도로
+     * 풀리는 오류가 아닙니다. 앱이 "동의해 주세요"로 되돌리지 않고 가입 불가 안내로 분기해야 합니다.
+     */
+    AUTH_010(HttpStatus.UNPROCESSABLE_ENTITY, "만 14세 미만은 가입할 수 없어요"),
 
     FAMILY_001(HttpStatus.NOT_FOUND, "해당 구성원을 찾을 수 없어요"),
     FAMILY_002(HttpStatus.NOT_FOUND, "소속된 가족 공간이 없어요"),
