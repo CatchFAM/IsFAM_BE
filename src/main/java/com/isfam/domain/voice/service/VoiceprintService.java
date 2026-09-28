@@ -6,6 +6,7 @@ import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
 import com.isfam.common.model.ModelVersionPolicy;
 import com.isfam.domain.audit.entity.VoiceprintAccessLog;
+import com.isfam.domain.audit.service.DataDeletionLogger;
 import com.isfam.domain.audit.service.VoiceprintAccessLogger;
 import com.isfam.domain.auth.entity.User;
 import com.isfam.domain.auth.repository.UserRepository;
@@ -34,7 +35,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * 내 목소리 등록 · 등록 상태 조회 (Phase 6).
+ * 내 목소리 등록 · 등록 상태 조회 (Phase 6) · 삭제 (Phase 14).
  *
  * <p><b>이 서비스가 다루는 임베딩은 전부 "본인 것"입니다.</b> 통화 상대방의 임베딩은
  * 어떤 경로로도 여기 들어오지 않습니다 — 그건 발신자 식별에 해당해 상대방 동의를 받을 수
@@ -57,6 +58,9 @@ import java.util.Set;
  * <p><b>Phase 12 — 생체정보가 들어오고 나가는 두 지점을 기록합니다</b>(P-28).
  * 등록은 수집이고, 모델 계열 변경으로 샘플을 버리는 것은 파기입니다. 둘 다
  * {@code voiceprint_access_logs} 에 남습니다.
+ *
+ * <p><b>Phase 14 — 목소리만 지우는 경로가 생겼습니다</b>(P-18, {@link #delete}).
+ * 전에는 음성을 빼려면 회원 탈퇴밖에 없었습니다(L12-c, 법 제37조 처리정지).
  */
 @Slf4j
 @Service
@@ -71,6 +75,7 @@ public class VoiceprintService {
     private final UserRepository userRepository;
     private final NotificationService notificationService;
     private final VoiceprintAccessLogger accessLogger;
+    private final DataDeletionLogger dataDeletionLogger;
     private final EmbeddingCipher embeddingCipher;
     private final ModelVersionPolicy modelVersionPolicy;
     private final ApplicationEventPublisher eventPublisher;
@@ -230,6 +235,71 @@ public class VoiceprintService {
                 found.getRegisteredAt());
     }
 
+    // ── 삭제 ────────────────────────────────────────────────
+
+    /**
+     * {@code DELETE /me/voiceprint} — 계정은 두고 목소리만 지웁니다 (Phase 14, P-18).
+     *
+     * <p><b>가족 폰 회수는 따로 만들 필요가 없었습니다.</b> {@code GET /family/embeddings} 가
+     * 음성이 없는 멤버를 since 와 무관하게 {@code removed_user_ids} 에 넣기 때문에,
+     * 여기서 지우고 동기화 푸시만 보내면 가족 폰이 알아서 지웁니다. 푸시가 유실돼도
+     * 6시간 주기 동기화에서 정리됩니다.
+     *
+     * <p><b>등록한 적 없어도 204 입니다(멱등).</b> 앱이 "삭제" 버튼을 두 번 눌렀거나
+     * 첫 응답을 못 받고 재시도한 경우에 404 를 주면, 이미 원하는 상태인데 에러 화면을 보게 됩니다.
+     *
+     * <p><b>기록은 둘입니다.</b> 탈퇴(WithdrawalService ③)와 같은 모양입니다.
+     * <ul>
+     *   <li>{@code voiceprint_access_logs} DESTROY(USER_REQUEST) — 지운 게 있을 때만</li>
+     *   <li>{@code data_deletion_logs} USER_REQUEST — 테이블별로, <b>0건이어도</b>.
+     *       "요청을 받았고 확인했더니 지울 게 없었다"도 파기 요구 처리입니다(법 제36조)</li>
+     * </ul>
+     * 둘 다 같은 트랜잭션이라 기록이 실패하면 삭제도 롤백됩니다 — 지워졌는데 기록이 없는
+     * 상태는 되돌릴 수 없고, 롤백은 사용자가 다시 누르면 됩니다.
+     *
+     * <p>공간 멤버십과 음성 공유 동의({@code voice_sharing_consented_at})는 건드리지 않습니다.
+     * 다시 등록하면 동의가 살아 있어 바로 공유됩니다. 동의 자체를 거두려면 공간을 나가야 합니다.
+     *
+     * @param clientIp 파기 기록의 "접속지"(고시 제8조)
+     */
+    @Transactional
+    public void delete(Long userId, String clientIp) {
+        Instant startedAt = clock.instant();
+
+        // 푸시 대상과 모델 버전은 지우기 전에 모읍니다. 아래 벌크 삭제가 영속성 컨텍스트를
+        // 비우므로(clearAutomatically), 여기서 읽은 엔티티는 이후 준영속입니다 — 값만 씁니다.
+        Optional<FamilyMembership> membership =
+                membershipRepository.findByUserIdAndStatus(userId, ACTIVE);
+
+        String modelVersion = voiceprintRepository.findByUserId(userId)
+                .map(Voiceprint::getEmbeddingModelVersion)
+                .orElse(null);
+
+        // ── 물리 삭제 ───────────────────────────────────────
+        // 생체정보는 soft delete 가 허용되지 않습니다(법 제21조, 복구 불가능한 방법).
+        int voiceprints = voiceprintRepository.deleteAllByUserId(userId);
+        int samples = sampleRepository.deleteAllByUserId(userId);
+
+        // ── 기록 ────────────────────────────────────────────
+        accessLogger.recordDestroy(userId, userId,
+                VoiceprintAccessLog.Reason.USER_REQUEST,
+                samples, voiceprints, modelVersion, clientIp, startedAt);
+
+        Instant finishedAt = clock.instant();
+        dataDeletionLogger.recordUserRequest(userId,
+                DataDeletionLogger.Tables.VOICEPRINTS, voiceprints, startedAt, finishedAt);
+        dataDeletionLogger.recordUserRequest(userId,
+                DataDeletionLogger.Tables.VOICEPRINT_SAMPLES, samples, startedAt, finishedAt);
+
+        // ── 가족 폰 회수 푸시 ───────────────────────────────
+        // 지운 게 없으면 가족 폰에도 있을 수 없어 보내지 않습니다.
+        if (voiceprints > 0 || samples > 0) {
+            membership.ifPresent(found -> publishRemoval(found.getFamilyId(), userId, startedAt));
+        }
+
+        log.info("음성 삭제 — userId={}, voiceprints={}, samples={}", userId, voiceprints, samples);
+    }
+
     // ── 내부 ────────────────────────────────────────────────
 
     /**
@@ -291,5 +361,31 @@ public class VoiceprintService {
 
         log.debug("음성 등록 동기화 — 대상 {}건, 알림 {}건 (familyId={})",
                 syncTargets.size(), notifyTargets.size(), familyId);
+    }
+
+    /**
+     * 음성 삭제 후 가족 폰 회수 푸시.
+     *
+     * <p><b>본인은 뺍니다</b> — 본인 임베딩은 원래 본인 폰으로 내려가지 않습니다
+     * ({@code GET /family/embeddings} 가 본인 제외).
+     *
+     * <p><b>알림함은 만들지 않습니다.</b> "목소리를 지웠어요"를 가족에게 알리는 건 본인이 원한
+     * 동작이 아니고, 처리정지 요구를 남에게 공개하는 셈입니다. data-only 푸시라 알림창에도
+     * 아무것도 뜨지 않습니다.
+     */
+    private void publishRemoval(Long familyId, Long userId, Instant now) {
+        Set<Long> syncTargets = new HashSet<>();
+        membershipRepository.findByFamilyIdAndStatusOrderByJoinedAtAsc(familyId, ACTIVE)
+                .forEach(item -> syncTargets.add(item.getUserId()));
+        syncTargets.remove(userId);
+
+        if (syncTargets.isEmpty()) {
+            return;
+        }
+
+        eventPublisher.publishEvent(new FamilySyncEvent(
+                syncTargets, FamilySyncEvent.Reason.VOICEPRINT_DELETED, familyId, now));
+
+        log.debug("음성 삭제 동기화 — 대상 {}건 (familyId={})", syncTargets.size(), familyId);
     }
 }

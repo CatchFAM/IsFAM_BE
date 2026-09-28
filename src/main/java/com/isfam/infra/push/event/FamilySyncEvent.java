@@ -34,6 +34,14 @@ public record FamilySyncEvent(
     public enum Reason {
         /** {@code POST /me/voiceprint} (Phase 6) */
         VOICEPRINT_UPDATED,
+        /**
+         * {@code DELETE /me/voiceprint} (Phase 14, P-18).
+         *
+         * <p>앱 동작은 다른 값과 같습니다 — {@code GET /family/embeddings} 를 부르면 이 사람이
+         * {@code removed_user_ids} 로 내려와 로컬에서 지워집니다. UPDATED 와 나눈 건
+         * 발송 로그에서 "등록"과 "삭제"를 구분하기 위해서입니다.
+         */
+        VOICEPRINT_DELETED,
         /** {@code POST /invitations/&#123;code&#125;/accept} */
         MEMBER_JOINED,
         /** {@code DELETE /family/members/&#123;user_id&#125;}, {@code DELETE /auth/me} (Phase 9) */
