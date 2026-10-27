@@ -31,14 +31,14 @@ public class UserAgreement {
     /**
      * 동의 항목. 법 제23조상 민감정보 처리와 제3자 제공은 별도 항목이어야 합니다.
      *
-     * <p>가입 시 5종이 한꺼번에 기록됩니다(AuthService.saveAgreements).
+     * <p>가입 시 6종이 한꺼번에 기록됩니다(AuthService.saveAgreements).
      * {@code VOICE_SHARING} 만 가입이 아니라 가족 공간 참여 시점에 따로 기록됩니다(InvitationService).
      *
      * <p><b>값을 추가할 때는 DB 제약도 함께 고치세요.</b> Hibernate 가 테이블을 만들 때
      * {@code agreement_type} 에 {@code CHECK (... IN (...))} 를 붙이고,
      * {@code ddl-auto=update} 는 값이 늘어도 그 제약을 고치지 않습니다 —
      * 새 값의 INSERT 가 제약 위반으로 실패합니다(db/phase13-0.sql 과 같은 이유).
-     * 현재 정의: db/phase14-3.sql
+     * 현재 정의: db/phone-sharing-1.sql
      */
     public enum Type {
         /** 만 14세 이상 확인 (필수) — 동의가 아니라 확인. 생년월일 대신 이 사실만 남깁니다 (P-08) */
@@ -60,7 +60,19 @@ public class UserAgreement {
          * <p>{@code family_memberships.voice_sharing_consented_at} 은 배포 게이팅용으로 그대로 둡니다.
          * 그 컬럼은 "지금 동의 상태인가"를, 이 행은 "언제 어떤 문구에 동의했나"를 답합니다.
          */
-        VOICE_SHARING
+        VOICE_SHARING,
+        /**
+         * 전화번호 제3자 제공 (가입 시 필수) — 내 휴대폰 번호가 같은 공간 가족에게 보이는 것.
+         *
+         * <p>{@code GET /family} 가 이 행이 {@code agreed=true} 인 멤버에게만 {@code phone_number} 를
+         * 채웁니다. 앱은 걸려온 번호가 이 값과 같을 때만 위험 공유의 {@code impersonated_user_id} 를
+         * 채웁니다 — 목소리 유사도로는 채우지 않습니다.
+         *
+         * <p>{@code VOICE_SHARING} 과 달리 <b>가입 때 한 번</b> 받고, 공간을 나가거나 다시 들어가도
+         * 새로 받지 않습니다. 철회는 회원 탈퇴입니다. 공간을 나가면 번호가 더 내려가지 않는 건
+         * active 멤버만 조회하기 때문이지 동의 철회가 아닙니다.
+         */
+        PHONE_SHARING
     }
 
     @Id
