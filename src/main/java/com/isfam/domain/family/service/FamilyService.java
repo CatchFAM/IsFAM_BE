@@ -3,6 +3,8 @@ package com.isfam.domain.family.service;
 import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
 import com.isfam.domain.auth.entity.User;
+import com.isfam.domain.auth.entity.UserAgreement;
+import com.isfam.domain.auth.repository.UserAgreementRepository;
 import com.isfam.domain.auth.repository.UserRepository;
 import com.isfam.domain.family.dto.FamilyDto;
 import com.isfam.domain.family.entity.Family;
@@ -56,6 +58,7 @@ public class FamilyService {
     private final FamilyMembershipRepository membershipRepository;
     private final FamilyMemberAliasRepository aliasRepository;
     private final UserRepository userRepository;
+    private final UserAgreementRepository userAgreementRepository;
     private final VoiceprintRepository voiceprintRepository;
     private final NotificationService notificationService;
     private final ApplicationEventPublisher eventPublisher;
@@ -340,12 +343,16 @@ public class FamilyService {
     }
 
     /**
-     * members[] 조립. 쿼리는 멤버십·유저·보이스프린트·별명 <b>4번으로 고정</b>입니다.
-     * 멤버마다 조회하면 8명짜리 공간에서 25번이 나갑니다.
+     * members[] 조립. 쿼리는 멤버십·유저·보이스프린트·별명·번호 공유 동의 <b>5번으로 고정</b>입니다.
+     * 멤버마다 조회하면 8명짜리 공간에서 30번 넘게 나갑니다.
      *
      * <p>별명 조회에 {@code myUserId} 가 viewer 로 들어가는 게 이 메서드의 핵심 제약입니다.
      * 이 조건이 빠지면 예외 하나 없이 전원의 별명이 응답에 실립니다 —
      * 대상 본인에게 "누가 나를 뭐라고 부르는지"가 노출되는 형태라 테스트로 고정해 두세요.
+     *
+     * <p><b>전화번호는 PHONE_SHARING 에 동의한 멤버만</b> 채웁니다. 동의 확인 없이
+     * {@code user.getPhoneNumber()} 를 그대로 실으면 동의 없는 제3자 제공이 됩니다(법 제17조).
+     * 이 조건도 테스트로 고정해 두었습니다(FamilyServicePhoneNumberTest).
      */
     private FamilyDto.FamilyResponse buildFamilyResponse(Family family, Long myUserId) {
         List<FamilyMembership> memberships =
@@ -365,6 +372,10 @@ public class FamilyService {
 
         Set<Long> registered = Set.copyOf(voiceprintRepository.findRegisteredUserIds(userIds));
 
+        // 번호 공유에 동의한 멤버. 동의 기록이 없는 계정은 여기 없고 번호가 null 로 나갑니다.
+        Set<Long> phoneSharing = Set.copyOf(userAgreementRepository
+                .findAgreedUserIds(userIds, UserAgreement.Type.PHONE_SHARING));
+
         // viewer = 응답을 받는 사람. 여기가 별명이 단방향으로 유지되는 유일한 지점입니다.
         Map<Long, String> aliases = aliasRepository
                 .findByFamilyIdAndViewerUserId(family.getId(), myUserId).stream()
@@ -373,13 +384,16 @@ public class FamilyService {
 
         List<FamilyDto.Member> members = memberships.stream()
                 .map(membership -> {
-                    User user = users.get(membership.getUserId());
+                    Long memberId = membership.getUserId();
+                    User user = users.get(memberId);
                     return new FamilyDto.Member(
-                            membership.getUserId(),
+                            memberId,
                             user == null ? null : user.getDisplayName(),
-                            aliases.get(membership.getUserId()),
+                            aliases.get(memberId),
+                            user != null && phoneSharing.contains(memberId)
+                                    ? user.getPhoneNumber() : null,
                             membership.getMemberRole(),
-                            registered.contains(membership.getUserId()),
+                            registered.contains(memberId),
                             membership.getJoinedAt());
                 })
                 .toList();

@@ -71,11 +71,19 @@ public final class FamilyDto {
      * <p>alias 는 <b>이 응답을 받는 사람이</b> 붙인 별명입니다. 지정 전이면 null 이고,
      * 같은 공간의 다른 사람이 부르는 이름은 여기 들어오지 않습니다.
      * 앱은 alias 와 displayName 을 함께 표시합니다 — 입력란에 "아빠", 우측에 "김상호".
+     *
+     * <p>phoneNumber 는 <b>가입 때 가족과 전화번호 공유(PHONE_SHARING)에 동의한 멤버만</b> 채웁니다.
+     * 동의 기록이 없는 계정(이 항목이 생기기 전에 가입한 계정)은 null 입니다.
+     * 저장 형식 그대로({@code 01022147788}, 하이픈 없음) 내려갑니다 — 걸려온 번호와 비교할 때의
+     * 정규화는 앱이 합니다. GET /auth/me 의 본인 번호는 마스킹하지만 여기는 마스킹하지 않습니다.
+     * 앱이 걸려온 번호와 대조해야 하기 때문이고, 그 제공에 대한 동의가 PHONE_SHARING 입니다.
+     * 기본 직렬화 설정(non_null)상 null 이면 필드 자체가 빠집니다.
      */
     public record Member(
             Long userId,
             String displayName,
             String alias,
+            String phoneNumber,
             FamilyMembership.Role memberRole,
             boolean voiceprintRegistered,
             Instant joinedAt
