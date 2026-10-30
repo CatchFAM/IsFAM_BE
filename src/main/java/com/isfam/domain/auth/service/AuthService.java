@@ -36,10 +36,11 @@ public class AuthService {
     /**
      * 동의 이력에 함께 남기는 약관 버전. 문안이 바뀌면 올리세요.
      *
-     * <p>v1.1 — 가족과 전화번호 공유(PHONE_SHARING) 항목 추가. 가입 화면 문구가 바뀌었으므로
-     * 같은 화면의 나머지 5종도 v1.1 로 기록됩니다.
+     * <p>v1.1 — 가족과 전화번호 공유(PHONE_SHARING) 항목 추가.
+     * <p>v1.2 — 음성 정보 가족 공유(VOICE_SHARING)를 초대 수락에서 가입 화면으로 이동.
+     * 가입 화면 문구가 바뀌었으므로 같은 화면의 나머지 6종도 v1.2 로 기록됩니다.
      */
-    private static final String AGREEMENT_VERSION = "v1.1";
+    private static final String AGREEMENT_VERSION = "v1.2";
 
     private final UserRepository userRepository;
     private final UserAgreementRepository userAgreementRepository;
@@ -73,10 +74,11 @@ public class AuthService {
         }
 
         // 필수 동의는 검증 어노테이션이 아니라 여기서 봅니다 — 명세가 AUTH_007 을 요구
-        // 필수 4종: 이용약관 · 개인정보 처리방침(P-06) · 음성 민감정보 처리 · 가족과 전화번호 공유
+        // 필수 5종: 이용약관 · 개인정보 처리방침(P-06) · 음성 민감정보 처리 · 음성 가족 공유 · 가족과 전화번호 공유
         if (!Boolean.TRUE.equals(request.termsAgreed())
                 || !Boolean.TRUE.equals(request.privacyAgreed())
                 || !Boolean.TRUE.equals(request.voicePrintAgreed())
+                || !Boolean.TRUE.equals(request.voiceSharingAgreed())
                 || !Boolean.TRUE.equals(request.phoneSharingAgreed())) {
             throw new BusinessException(ErrorCode.AUTH_007);
         }
@@ -104,7 +106,7 @@ public class AuthService {
     /**
      * 동의 이력 저장. 시각과 약관 버전을 함께 남깁니다(legal-compliance.md 8장).
      *
-     * <p>가입 1건 = 6행입니다. 필수 4종과 나이 확인은 위에서 true 가 확인됐으므로 항상
+     * <p>가입 1건 = 7행입니다. 필수 5종과 나이 확인은 위에서 true 가 확인됐으므로 항상
      * agreed=true 이고, 마케팅(선택)만 false 로 남을 수 있습니다. <b>거부한 선택 동의도 행을 남깁니다</b> —
      * "묻지 않았다"와 "물었는데 거부했다"를 구분해야 하기 때문입니다(L5 항목별 동의).
      *
@@ -112,8 +114,12 @@ public class AuthService {
      * 함께 남고, 탈퇴 후에도 분쟁 대비로 보관되는 성격이 동의 이력과 같습니다 —
      * "14세 미만을 받지 않았다"는 증명이 여기서 나옵니다.
      *
-     * <p>PHONE_SHARING 은 제3자 제공 동의라 <b>GET /family 가 이 행으로 번호 노출 여부를 판정</b>합니다.
-     * 이 행이 없는 계정(이 항목이 생기기 전에 가입한 계정)은 가족에게 번호가 내려가지 않습니다.
+     * <p>VOICE_SHARING · PHONE_SHARING 은 제3자 제공 동의라 이 행이 판정 근거가 됩니다.
+     * <ul>
+     *   <li>VOICE_SHARING — 공간을 만들거나 초대를 수락할 때 이 행으로 목소리 공유를 켭니다
+     *       (FamilyService.create · InvitationService.accept)</li>
+     *   <li>PHONE_SHARING — GET /family 가 이 행으로 번호 노출 여부를 판정합니다</li>
+     * </ul>
      */
     private void saveAgreements(Long userId, AuthDto.SignupRequest request, Instant now) {
         userAgreementRepository.saveAll(List.of(
@@ -125,6 +131,8 @@ public class AuthService {
                         request.privacyAgreed(), AGREEMENT_VERSION, now),
                 UserAgreement.of(userId, UserAgreement.Type.VOICE_PRINT,
                         request.voicePrintAgreed(), AGREEMENT_VERSION, now),
+                UserAgreement.of(userId, UserAgreement.Type.VOICE_SHARING,
+                        request.voiceSharingAgreed(), AGREEMENT_VERSION, now),
                 UserAgreement.of(userId, UserAgreement.Type.PHONE_SHARING,
                         request.phoneSharingAgreed(), AGREEMENT_VERSION, now),
                 UserAgreement.of(userId, UserAgreement.Type.MARKETING,
