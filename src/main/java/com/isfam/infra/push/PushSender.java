@@ -20,9 +20,16 @@ public interface PushSender {
     /**
      * data-only 메시지. 알림창에 표시되지 않습니다.
      *
-     * <p>{@code family_sync} 전용입니다. <b>{@code devices.notification_enabled} 를 보지 않습니다</b> —
-     * 이건 알림이 아니라 임베딩 동기화를 위한 시스템 신호라, 사용자가 알림을 껐다고 막으면
-     * 강퇴당한 사람 폰에 남의 생체정보가 남습니다.
+     * <p>쓰는 곳은 두 군데입니다.
+     * <ul>
+     *   <li>{@code family_sync} — 임베딩 동기화를 위한 시스템 신호</li>
+     *   <li>{@code danger_share} — 의심 번호를 받아가라는 신호. 문구는 앱이 만들어 로컬 알림으로 띄움</li>
+     * </ul>
+     *
+     * <p><b>{@code devices.notification_enabled} 로 대상을 거르지 않습니다.</b> 둘 다 앱이
+     * 반드시 받아야 하는 신호라, 알림을 껐다고 막으면 family_sync 는 강퇴당한 사람 폰에 남의
+     * 생체정보가 남고, danger_share 는 그 폰이 의심 번호를 영영 받지 못합니다.
+     * 알림창 표시 여부는 danger_share 의 {@code show_notification} 값으로 앱에 넘깁니다.
      *
      * @return 무효 토큰 목록
      */

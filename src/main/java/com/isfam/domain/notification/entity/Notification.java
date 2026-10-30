@@ -31,9 +31,9 @@ import java.time.Instant;
  * 존재하지 않습니다. 있으면 아무나 남에게 가짜 위험 알림을 꽂을 수 있습니다
  * (service-flow.md 9장).
  *
- * <p><b>{@code danger_call} 본문에 가족 이름·닉네임을 절대 넣지 마세요.</b>
+ * <p><b>{@code danger_call}·{@code danger_share} 본문에 가족 이름·닉네임·번호를 절대 넣지 마세요.</b>
  * 서버가 발신자 매칭 결과를 안다는 뜻이 되어 legal-compliance.md 5장과 정면으로 모순됩니다.
- * 구체적 안내("엄마 목소리로 확인됨")는 폰 로컬 알림이 담당합니다.
+ * 구체적 안내("엄마 목소리로 확인됨", "아빠 번호로 온 전화")는 폰이 만듭니다.
  * 반대로 {@code member_joined}·{@code member_left} 는 서버가 정당하게 아는 사실이라
  * 닉네임을 넣어도 됩니다 — 그 경계가 "통화 분석 결과인가"입니다.
  */
@@ -53,9 +53,14 @@ public class Notification {
      * {@code protection_warning} 은 ERD 에 정의돼 있지만 <b>아직 발송 지점이 없습니다.</b>
      * 명세 어디에도 이 알림을 만드는 API 가 없어서, 값만 열어두고 사용하지 않습니다.
      * (권한 회수 감지 같은 용도로 나중에 붙일 자리입니다)
+     *
+     * <p><b>값을 추가하면 DB CHECK 제약도 SQL 로 바꿔야 합니다.</b> Hibernate 는 기존 제약을
+     * 갱신하지 않습니다 — {@code db/danger-share-1.sql} 참고.
      */
     public enum Type {
-        DANGER_CALL, MEMBER_JOINED, MEMBER_LEFT, VOICEPRINT_REGISTERED, PROTECTION_WARNING;
+        DANGER_CALL, MEMBER_JOINED, MEMBER_LEFT, VOICEPRINT_REGISTERED, PROTECTION_WARNING,
+        /** 가족이 위험 통화를 공유함. 받는 사람에게 생성 */
+        DANGER_SHARE;
 
         /** 응답은 "danger_call" 소문자입니다 */
         @JsonValue
@@ -64,9 +69,15 @@ public class Notification {
         }
     }
 
-    /** {@code NONE} 이면 앱이 탭해도 이동하지 않습니다 */
+    /**
+     * {@code NONE} 이면 앱이 탭해도 이동하지 않습니다.
+     *
+     * <p>{@code DANGER_SHARE} 의 {@code target_id} 는 share_id 입니다. 앱은 푸시를 받을 때
+     * 폰에 저장해 둔 공유 정보를 이 값으로 찾아 화면을 그립니다 — 서버를 다시 부르지 않으므로
+     * 7일 뒤 행이 지워져도 알림함은 그대로 동작합니다.
+     */
     public enum TargetType {
-        VOICE_ANALYSIS, FAMILY, SETTINGS, NONE;
+        VOICE_ANALYSIS, FAMILY, SETTINGS, NONE, DANGER_SHARE;
 
         @JsonValue
         public String toJson() {
@@ -96,7 +107,7 @@ public class Notification {
     @Column(name = "target_type", nullable = false, length = 32)
     private TargetType targetType;
 
-    /** {@code targetType} 이 {@code VOICE_ANALYSIS} 면 analysis_id */
+    /** {@code VOICE_ANALYSIS} 면 analysis_id, {@code DANGER_SHARE} 면 share_id */
     @Column(name = "target_id")
     private Long targetId;
 
@@ -165,6 +176,21 @@ public class Notification {
                 "위험한 통화가 감지됐어요",
                 "통화 분석 결과를 확인해 보세요",
                 TargetType.VOICE_ANALYSIS, analysisId);
+    }
+
+    /**
+     * {@code POST /notifications/danger-share} 성공 시, 공유한 사람을 제외한 공간 멤버 전원에게.
+     *
+     * <p><b>문구는 고정입니다.</b> 누가 공유했는지, 누구를 사칭했는지, 어떤 번호였는지는
+     * 받는 폰이 {@code alias}(없으면 {@code display_name})로 직접 만듭니다. 별명은 보는
+     * 사람마다 달라 서버 문구 하나로 만들 수 없고, 번호는 여기 들어가는 순간 푸시로
+     * 미국 서버를 거칩니다.
+     */
+    public static Notification dangerShare(Long userId, Long shareId) {
+        return new Notification(userId, Type.DANGER_SHARE,
+                "위험한 통화가 공유됐어요",
+                "가족이 위험한 통화를 공유했어요",
+                TargetType.DANGER_SHARE, shareId);
     }
 
     // ── 상태 변경 ───────────────────────────────────────────

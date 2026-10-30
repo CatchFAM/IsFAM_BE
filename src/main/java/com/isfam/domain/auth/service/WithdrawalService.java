@@ -15,6 +15,7 @@ import com.isfam.domain.device.repository.DeviceRepository;
 import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMemberAliasRepository;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
+import com.isfam.domain.notification.repository.DangerShareRepository;
 import com.isfam.domain.notification.repository.NotificationRepository;
 import com.isfam.domain.retention.repository.RetiredAccessLogRepository;
 import com.isfam.domain.voice.entity.Voiceprint;
@@ -90,6 +91,7 @@ public class WithdrawalService {
     private final VoiceAnalysisRepository voiceAnalysisRepository;
     private final CallEventRepository callEventRepository;
     private final NotificationRepository notificationRepository;
+    private final DangerShareRepository dangerShareRepository;
     private final DeviceRepository deviceRepository;
     private final RetiredAccessLogRepository retiredAccessLogRepository;
     private final VoiceprintAccessLogger voiceprintAccessLogger;
@@ -175,6 +177,12 @@ public class WithdrawalService {
                 .ifPresent(FamilyMembership::leave);
 
         // ── ⑤ 이용 기록 삭제 ───────────────────────────────
+        // danger_shares 를 voice_analyses 보다 먼저 지웁니다 — analysis_id 로 분석을 가리킵니다.
+        // 탈퇴자가 보낸 공유(의심 번호 포함)와 탈퇴자를 사칭한 공유가 대상입니다.
+        // 받은 가족은 이미 폰에 저장했으므로 그쪽 화면에는 영향이 없습니다.
+        deleted.put(DataDeletionLogger.Tables.DANGER_SHARES,
+                dangerShareRepository.deleteAllByUserId(userId));
+
         // voice_analyses 를 call_events 보다 먼저 지웁니다 — call_events.voice_analysis_id 가
         // 참조하는 쪽이라 반대로 하면 참조가 떠 있는 순간이 생깁니다.
         deleted.put(DataDeletionLogger.Tables.VOICE_ANALYSES,

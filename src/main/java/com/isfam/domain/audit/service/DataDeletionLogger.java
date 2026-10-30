@@ -52,6 +52,8 @@ public class DataDeletionLogger {
         public static final String REFRESH_TOKENS = "refresh_tokens";
         public static final String SPOOF_CHECKS = "spoof_checks";
         public static final String DEMO_SESSIONS = "demo_sessions";
+        /** 위험 통화 공유 — 의심 번호가 들어 있는 테이블. 보관기간 배치 대상(7일), 탈퇴·분석 삭제 시 함께 삭제 */
+        public static final String DANGER_SHARES = "danger_shares";
         /** Phase 13 — 보관기간 배치 대상(2년) */
         public static final String EMBEDDING_ACCESS_LOGS = "embedding_access_logs";
         /** Phase 13 — 보관기간 배치 대상(2년) */

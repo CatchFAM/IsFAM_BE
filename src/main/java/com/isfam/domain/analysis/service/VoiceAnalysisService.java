@@ -13,6 +13,7 @@ import com.isfam.domain.analysis.repository.CallEventRepository;
 import com.isfam.domain.analysis.repository.SpoofCheckRepository;
 import com.isfam.domain.analysis.repository.VoiceAnalysisRepository;
 import com.isfam.domain.notification.entity.Notification;
+import com.isfam.domain.notification.repository.DangerShareRepository;
 import com.isfam.domain.notification.repository.NotificationRepository;
 import com.isfam.domain.notification.service.NotificationService;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +49,7 @@ public class VoiceAnalysisService {
     private final CallEventRepository callEventRepository;
     private final SpoofCheckRepository spoofCheckRepository;
     private final NotificationRepository notificationRepository;
+    private final DangerShareRepository dangerShareRepository;
     private final NotificationService notificationService;
     private final ModelVersionPolicy modelVersionPolicy;
     private final Clock clock;
@@ -195,13 +197,16 @@ public class VoiceAnalysisService {
     /**
      * {@code DELETE /voice-analyses/&#123;analysis_id&#125;} — 204.
      *
-     * <p>세 가지가 함께 정리됩니다.
+     * <p>네 가지가 함께 정리됩니다.
      * <ol>
      *   <li>{@code call_events.voice_analysis_id} 를 null 로 — 참조가 남으면 나중에
      *       존재하지 않는 분석을 가리킵니다. 상태는 {@code analyzed_on_device} 로 두는데,
      *       분석이 실제로 일어났다는 사실까지 거짓이 되는 건 아니기 때문입니다</li>
      *   <li>이 분석을 가리키던 {@code danger_call} 알림 삭제 — 남겨두면 사용자가 탭했을 때
      *       404 를 만납니다. 알림함에 열리지 않는 항목이 남는 것보다 사라지는 편이 낫습니다</li>
+     *   <li>이 분석의 위험 통화 공유({@code danger_shares}) 삭제 — 분석이 사라지면 공유의
+     *       근거도 사라지고, 의심 번호를 더 들고 있을 이유가 없습니다. 받은 가족은 이미 폰에
+     *       저장했으므로 그쪽 알림함({@code danger_share})은 그대로 둡니다</li>
      *   <li>{@code voice_analyses} row 삭제</li>
      * </ol>
      *
@@ -221,10 +226,13 @@ public class VoiceAnalysisService {
         int removedNotifications = notificationRepository.deleteByTarget(
                 userId, Notification.TargetType.VOICE_ANALYSIS, analysisId);
 
+        // 분석보다 먼저 — analysis_id 로 분석을 가리킵니다
+        int removedShares = dangerShareRepository.deleteByAnalysisId(analysisId);
+
         voiceAnalysisRepository.delete(analysis);
 
-        log.debug("분석 기록 삭제 — analysisId={}, 함께 정리한 알림 {}건 (spoof_checks 는 보존)",
-                analysisId, removedNotifications);
+        log.debug("분석 기록 삭제 — analysisId={}, 함께 정리한 알림 {}건 · 공유 {}건 (spoof_checks 는 보존)",
+                analysisId, removedNotifications, removedShares);
     }
 
     // ── 내부 ────────────────────────────────────────────────
