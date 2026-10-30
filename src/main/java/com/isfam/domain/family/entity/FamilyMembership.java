@@ -77,18 +77,16 @@ public class FamilyMembership extends BaseTimeEntity {
     private Status status;
 
     /**
-     * 제3자 제공 동의 시각 — 내 임베딩이 가족 기기로 복제되는 것에 대한 동의입니다.
+     * 이 공간에서 음성 공유를 시작한 시각 — 내 임베딩이 이 공간 가족 기기로 복제되는 것의 <b>게이팅 값</b>입니다.
+     * {@code EmbeddingSyncService} 가 이 값이 null 인 멤버의 임베딩을 배포하지 않습니다.
      *
-     * <p><b>nullable 입니다.</b> ERD 는 NOT NULL 이지만 POST /family 에는 동의 입력 필드가
-     * 없습니다(초대 수락에만 있음). 공간을 갓 만든 owner 는 아직 임베딩을 받아갈 상대가
-     * 없으므로 제공 자체가 발생하지 않습니다. 받은 적 없는 동의를 시각만 찍어 남기면
-     * 분쟁 시 그게 동의 증빙으로 오독됩니다 — 그래서 null 로 둡니다.
+     * <p>근거는 <b>가입 때 받은 음성 공유 동의</b>(user_agreements.VOICE_SHARING)입니다.
+     * 공간을 만들거나(owner) 초대를 수락하는(member) 순간 그 동의를 확인해 이 값을 채웁니다.
+     * 공간에서 동의를 따로 받지 않습니다.
      *
-     * <p>Phase 4 에서 owner 가 초대 링크를 <b>만들 때</b> 동의를 함께 받아 이 값을 채웁니다
-     * (POST /family/invite-code 의 voice_sharing_consent — 명세 확장).
-     * 링크 생성은 "이제부터 내 임베딩이 남의 기기로 나간다"는 첫 시점이라 동의 획득 지점으로 맞습니다.
-     * 동의를 보내지 않으면 여전히 null 이고, <b>null 인 멤버의 임베딩은 Phase 7 배포 대상에서
-     * 제외해야 합니다.</b>
+     * <p><b>nullable 입니다.</b> 동의 행이 없는 계정이면 null 로 두고 배포하지 않습니다.
+     * 가입에서 필수라 정상 흐름에서는 생기지 않지만, 받은 적 없는 동의를 시각만 찍어 남기면
+     * 분쟁 시 그게 동의 증빙으로 오독되므로 확인 없이 채우지 않습니다.
      */
     @Column(name = "voice_sharing_consented_at")
     private Instant voiceSharingConsentedAt;
@@ -106,12 +104,21 @@ public class FamilyMembership extends BaseTimeEntity {
         this.joinedAt = joinedAt;
     }
 
-    /** 공간 생성자. voice_sharing_consent 입력이 없는 경로라 동의 시각은 null 입니다 */
-    public static FamilyMembership createOwner(Long familyId, Long userId, Instant joinedAt) {
-        return new FamilyMembership(familyId, userId, Role.OWNER, null, joinedAt);
+    /**
+     * 공간 생성자.
+     *
+     * @param consentedAt 가입 때 음성 공유에 동의했으면 생성 시각, 동의 행이 없으면 null
+     */
+    public static FamilyMembership createOwner(Long familyId, Long userId,
+                                               Instant consentedAt, Instant joinedAt) {
+        return new FamilyMembership(familyId, userId, Role.OWNER, consentedAt, joinedAt);
     }
 
-    /** 초대 수락. voice_sharing_consent=true 를 받은 시각이 들어갑니다 */
+    /**
+     * 초대 수락.
+     *
+     * @param consentedAt 가입 때 음성 공유에 동의했으면 수락 시각, 동의 행이 없으면 null
+     */
     public static FamilyMembership join(Long familyId, Long userId,
                                         Instant consentedAt, Instant joinedAt) {
         return new FamilyMembership(familyId, userId, Role.MEMBER, consentedAt, joinedAt);
@@ -135,10 +142,6 @@ public class FamilyMembership extends BaseTimeEntity {
         this.status = Status.REMOVED;
     }
 
-    public void consentVoiceSharing(Instant consentedAt) {
-        this.voiceSharingConsentedAt = consentedAt;
-    }
-
     /**
      * 나갔던 공간에 초대로 다시 들어옴.
      *
@@ -149,8 +152,8 @@ public class FamilyMembership extends BaseTimeEntity {
      * <p>역할은 <b>항상 MEMBER 로 리셋</b>합니다. 예전에 owner 였다 해도 지금은 초대받아
      * 들어오는 입장이고, 그 공간엔 이미 다른 owner 가 있습니다.
      *
-     * <p>{@code joinedAt} 과 동의 시각도 새로 찍습니다 — 지난번 동의로 이번 제공까지
-     * 커버되지 않습니다.
+     * <p>{@code joinedAt} 과 공유 시작 시각도 새로 찍습니다 — 나가 있던 동안은 공유가 없었으므로
+     * 이번 참여 시각부터가 이 공간에서의 공유 기간입니다.
      */
     public void rejoin(Instant consentedAt, Instant joinedAt) {
         this.memberRole = Role.MEMBER;

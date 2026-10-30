@@ -39,7 +39,7 @@ public enum ErrorCode {
 
     INVITE_001(HttpStatus.NOT_FOUND, "만료되었거나 존재하지 않는 초대예요"), // 만료·비활성이면 410
     INVITE_002(HttpStatus.CONFLICT, "이미 이 가족 공간의 구성원이에요"),
-    INVITE_003(HttpStatus.UNPROCESSABLE_ENTITY, "음성 공유 동의가 필요해요"),
+    // INVITE_003(음성 공유 동의 필요)은 없앴습니다 — 음성 공유 동의를 가입 때 받습니다(AUTH_007)
 
     VOICE_001(HttpStatus.UNPROCESSABLE_ENTITY, "음질이 부족해요. 조용한 곳에서 다시 녹음해 주세요"),
     /**
