@@ -62,6 +62,21 @@ public enum ErrorCode {
     DEVICE_002(HttpStatus.UNAUTHORIZED, "단말 정보가 필요해요"),
     MODEL_001(HttpStatus.UNPROCESSABLE_ENTITY, "앱을 최신 버전으로 업데이트해 주세요"),
 
+    // ── 위험 통화 공유 (POST·GET /notifications/danger-share) ──
+    /** {@code impersonated_user_id}·{@code phone_number} 가 둘 다 있거나 둘 다 없음 */
+    SHARE_001(HttpStatus.BAD_REQUEST, "사칭된 가족과 의심 번호 중 하나만 보내 주세요"),
+    /** 본인 분석이 아님 · 사칭된 가족이 같은 공간의 멤버가 아님 */
+    SHARE_002(HttpStatus.FORBIDDEN, "공유할 수 없는 통화 기록이에요"),
+    /** 같은 분석을 이미 공유함 */
+    SHARE_003(HttpStatus.CONFLICT, "이미 가족에게 공유한 통화예요"),
+    /** 정상 판정 · 분석 후 24시간 경과 · 공유받을 가족이 없음 */
+    SHARE_004(HttpStatus.UNPROCESSABLE_ENTITY, "지금은 이 통화를 공유할 수 없어요"),
+    /**
+     * 조회 실패 — 없음 · 다른 공간 · 공유 후 들어온 사람 · 7일 경과 · 번호 없는 공유.
+     * 이유를 나누지 않습니다. 나누면 남의 공유가 존재하는지 알려주게 됩니다.
+     */
+    SHARE_005(HttpStatus.NOT_FOUND, "공유된 정보를 찾을 수 없어요"),
+
     // [확장] 공통
     COMMON_001(HttpStatus.BAD_REQUEST, "요청 형식이 올바르지 않아요"),
     COMMON_002(HttpStatus.UNPROCESSABLE_ENTITY, "입력값을 확인해 주세요"),
