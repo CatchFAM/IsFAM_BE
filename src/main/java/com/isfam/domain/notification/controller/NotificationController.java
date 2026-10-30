@@ -4,6 +4,8 @@ import com.isfam.common.security.CurrentUser;
 import com.isfam.common.web.PageQuery;
 import com.isfam.domain.notification.dto.NotificationDto;
 import com.isfam.domain.notification.service.NotificationService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -24,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
  * {@code @ModelAttribute} 로 받으면 {@code page_size} 가 {@code pageSize} 에 안 붙고
  * 조용히 기본값이 됩니다.
  */
+@Tag(name = "notification", description = "앱 내 알림함")
 @RestController
 @RequestMapping("/notifications")
 @RequiredArgsConstructor
@@ -35,6 +38,7 @@ public class NotificationController {
      * {@code unread_only} 는 선택이고 기본 false 입니다. 앱은 알림함 화면에서 전체를,
      * "안 읽음" 탭에서 true 를 씁니다.
      */
+    @Operation(summary = "앱 내 알림목록")
     @GetMapping
     public NotificationDto.ListResponse list(
             @CurrentUser Long userId,
@@ -47,12 +51,14 @@ public class NotificationController {
     }
 
     /** 앱 실행 시퀀스 ⑨ — 뱃지 숫자만 필요할 때 목록을 통째로 받지 않게 하는 API */
+    @Operation(summary = "안 읽은 알림 개수")
     @GetMapping("/unread-count")
     public NotificationDto.UnreadCountResponse unreadCount(@CurrentUser Long userId) {
         return notificationService.unreadCount(userId);
     }
 
     /** 푸시를 탭했을 때 앱이 호출합니다. 남의 알림이면 404 */
+    @Operation(summary = "알림 읽음 처리")
     @PutMapping("/{notificationId}/read")
     public NotificationDto.ReadResponse markRead(
             @CurrentUser Long userId,

@@ -8,6 +8,8 @@ import com.isfam.common.web.PageResponse;
 import com.isfam.domain.analysis.dto.VoiceAnalysisDto;
 import com.isfam.domain.analysis.entity.VoiceAnalysis;
 import com.isfam.domain.analysis.service.VoiceAnalysisService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -39,6 +41,7 @@ import java.time.format.DateTimeParseException;
  * 쿼리 파라미터 바인딩에 적용되지 않아서, {@code @ModelAttribute} 로 받으면
  * {@code min_risk_level} 이 조용히 무시됩니다.
  */
+@Tag(name = "voice analysis", description = "통화 분석 결과 · 히스토리")
 @RestController
 @RequestMapping("/voice-analyses")
 @RequiredArgsConstructor
@@ -53,6 +56,7 @@ public class VoiceAnalysisController {
      * {@code analyzed_on_device} 로 바꾸고 {@code voice_analysis_id} 를 채웁니다.
      * 앱이 {@code PUT /call-events} 를 따로 부를 필요가 없습니다.
      */
+    @Operation(summary = "통화분석 결과값 제출")
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public VoiceAnalysisDto.Item submit(
             @CurrentUser Long userId,
@@ -60,6 +64,7 @@ public class VoiceAnalysisController {
         return voiceAnalysisService.submit(userId, request);
     }
 
+    @Operation(summary = "통화분석 단건 조회")
     @GetMapping("/{analysisId}")
     public VoiceAnalysisDto.Item get(@CurrentUser Long userId,
                                      @PathVariable Long analysisId) {
@@ -74,6 +79,7 @@ public class VoiceAnalysisController {
      * 날짜만 오면 <b>UTC 기준</b> 그날 00:00:00 ~ 23:59:59.999999999 로 해석합니다 —
      * 서버 시각이 전부 UTC 라 여기서 KST 를 끼워 넣으면 하루 경계가 9시간 어긋납니다.
      */
+    @Operation(summary = "통화분석 히스토리 목록")
     @GetMapping
     public PageResponse<VoiceAnalysisDto.Item> search(
             @CurrentUser Long userId,
@@ -94,6 +100,7 @@ public class VoiceAnalysisController {
     }
 
     /** 성공하면 204. 응답 본문이 없습니다 */
+    @Operation(summary = "분석기록 삭제")
     @DeleteMapping("/{analysisId}")
     public ResponseEntity<Void> delete(@CurrentUser Long userId,
                                        @PathVariable Long analysisId) {

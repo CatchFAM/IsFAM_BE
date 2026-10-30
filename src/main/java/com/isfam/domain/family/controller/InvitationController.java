@@ -3,6 +3,8 @@ package com.isfam.domain.family.controller;
 import com.isfam.common.security.CurrentUser;
 import com.isfam.domain.family.dto.InvitationDto;
 import com.isfam.domain.family.service.InvitationService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
  * SecurityConfig 의 {@code PUBLIC_GET} 에 {@code /invitations/*} 가 이미 들어 있고,
  * 이 패턴은 단일 세그먼트만 매칭하므로 {@code /invitations/&#123;code&#125;/accept} 는 걸리지 않습니다.
  */
+@Tag(name = "invitation", description = "초대 링크 발급 · 조회 · 수락")
 @RestController
 @RequestMapping("/invitations")
 @RequiredArgsConstructor
@@ -29,6 +32,7 @@ public class InvitationController {
      * 딥링크 진입 직후 · 비인증 호출.
      * 404 / 410(INVITE_001) 이면 앱은 "만료된 초대예요" 로 분기합니다.
      */
+    @Operation(summary = "초대링크 진입 시 미리보기")
     @GetMapping("/{inviteCode}")
     public InvitationDto.PreviewResponse preview(@PathVariable String inviteCode) {
         return invitationService.preview(inviteCode);
@@ -42,6 +46,7 @@ public class InvitationController {
      *
      * <p>수락 직후 앱은 {@code GET /family/embeddings} 를 since 없이 호출합니다.
      */
+    @Operation(summary = "초대 수락")
     @PostMapping("/{inviteCode}/accept")
     public InvitationDto.AcceptResponse accept(
             @CurrentUser Long userId,

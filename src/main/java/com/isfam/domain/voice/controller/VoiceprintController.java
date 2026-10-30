@@ -4,6 +4,8 @@ import com.isfam.common.security.CurrentUser;
 import com.isfam.common.web.ClientIpResolver;
 import com.isfam.domain.voice.dto.VoiceprintDto;
 import com.isfam.domain.voice.service.VoiceprintService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -33,6 +35,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 생체정보 수집 기록의 "접속지"(고시 제8조) 때문입니다. 조회에는 붙이지 않았습니다 —
  * 그 응답에는 임베딩이 실리지 않아 기록 대상이 아닙니다. 삭제(Phase 14)는 파기 기록 때문에 붙습니다.
  */
+@Tag(name = "voiceprint", description = "내 목소리 등록 · 조회 · 삭제")
 @RestController
 @RequestMapping("/me/voiceprint")
 @RequiredArgsConstructor
@@ -46,6 +49,7 @@ public class VoiceprintController {
      *
      * <p>새로 만들어지는지 갱신되는지 앱이 구분할 필요가 없어 201 이 아니라 200 입니다.
      */
+    @Operation(summary = "내 목소리 등록/재등록")
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public VoiceprintDto.RegisterResponse register(
             @CurrentUser Long userId,
@@ -56,6 +60,7 @@ public class VoiceprintController {
     }
 
     /** 미등록이면 404 가 아니라 {@code voiceprint_registered=false} 인 200 입니다 */
+    @Operation(summary = "내 목소리 등록 상태 조회")
     @GetMapping
     public VoiceprintDto.StatusResponse getStatus(@CurrentUser Long userId) {
         return voiceprintService.getStatus(userId);
@@ -71,6 +76,7 @@ public class VoiceprintController {
      * <p>본문을 받지 않습니다. 탈퇴와 달리 비밀번호를 묻지 않는 이유는, 되돌릴 수 없긴 하지만
      * 계정이 남아 언제든 다시 등록할 수 있고, 권리 행사(처리정지)를 어렵게 만들 이유가 없어서입니다.
      */
+    @Operation(summary = "내 목소리 삭제")
     @DeleteMapping
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@CurrentUser Long userId, HttpServletRequest httpRequest) {
