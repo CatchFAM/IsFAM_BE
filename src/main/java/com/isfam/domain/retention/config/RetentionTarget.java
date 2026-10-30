@@ -15,6 +15,9 @@ import com.isfam.domain.audit.service.DataDeletionLogger.Tables;
  *
  * <p>여기에 없는 테이블은 배치가 건드리지 않습니다. 특히 {@code data_deletion_logs} 는
  * 의도적으로 빠져 있습니다 — 지운 데이터가 사라진 뒤에도 남아야 의미가 있습니다.
+ *
+ * <p>값을 추가하면 {@code RetentionProperties.Days} 에도 기간을 추가해야 합니다.
+ * 배치 감시({@code RetentionMonitor})는 이 enum 의 개수를 그대로 기대값으로 씁니다.
  */
 public enum RetentionTarget {
 
@@ -29,6 +32,13 @@ public enum RetentionTarget {
 
     /** 90일 (P-27) */
     NOTIFICATIONS(Tables.NOTIFICATIONS, "created_at", null, false),
+
+    /**
+     * 7일 — 위험 통화 공유. <b>통화 상대방(비회원)의 번호</b>가 들어 있는 테이블입니다.
+     * 가족이 받아갈 기간만 두고 행을 통째로 지웁니다.
+     * {@code voice_analyses} 보다 먼저 — {@code analysis_id} 로 분석을 가리킵니다.
+     */
+    DANGER_SHARES(Tables.DANGER_SHARES, "created_at", null, false),
 
     /** 1년. {@code call_events} 보다 먼저 — 회원 탈퇴와 같은 순서입니다 */
     VOICE_ANALYSES(Tables.VOICE_ANALYSES, "created_at", null, false),

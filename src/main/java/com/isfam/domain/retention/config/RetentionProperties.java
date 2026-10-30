@@ -1,5 +1,6 @@
 package com.isfam.domain.retention.config;
 
+import com.isfam.domain.notification.entity.DangerShare;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.ZoneId;
@@ -19,6 +20,9 @@ import java.util.Map;
  * <p><b>대신 법정 최소치 아래로는 내릴 수 없습니다</b> (원칙 R-7). 접속기록을 730일 미만으로
  * 적으면 기동을 거부합니다. {@code EmbeddingCipher} 가 키 없이 뜨지 않는 것과 같은 이유 —
  * 운영 중에 발견되면 이미 지워진 뒤라 되돌릴 수 없습니다.
+ *
+ * <p><b>반대로 약속한 기간 위로 올릴 수 없는 대상도 있습니다.</b> {@code danger_shares} 는
+ * 처리방침에 "7일 후 삭제"로 적는 비회원 번호라, 7일을 넘기면 기동을 거부합니다.
  *
  * <pre>
  * isfam.retention.cron=0 10 4 * * *
@@ -49,6 +53,9 @@ public record RetentionProperties(
 
     /** 안전성 확보조치 기준 제8조 — 민감정보 처리 시스템 접속기록 2년 이상 */
     public static final int LEGAL_MINIMUM_ACCESS_LOG_DAYS = 730;
+
+    /** 위험 통화 공유 — 처리방침에 약속한 상한. 조회 가능 기간과 같습니다 */
+    public static final int MAX_DANGER_SHARE_DAYS = (int) DangerShare.READABLE_PERIOD.toDays();
 
     static final String DEFAULT_CRON = "0 10 4 * * *";
     static final String DEFAULT_ZONE = "Asia/Seoul";
@@ -82,7 +89,7 @@ public record RetentionProperties(
                     "isfam.retention.max-chunks-per-run 은 1 이상이어야 합니다: " + maxChunksPerRun);
         }
         if (days == null) {
-            days = new Days(null, null, null, null, null, null, null, null);
+            days = new Days(null, null, null, null, null, null, null, null, null);
         }
     }
 
@@ -96,6 +103,8 @@ public record RetentionProperties(
      *
      * <p>필드를 대상마다 따로 둔 이유는 설정 파일에서 <b>무엇이 몇 일인지 한눈에</b> 보여야
      * 하기 때문입니다. 맵 하나로 받으면 키 오타가 조용히 기본값으로 떨어집니다.
+     *
+     * <p>{@code dangerShares} 는 맨 뒤에 붙였습니다 — 기존 필드 위치를 바꾸지 않으려고요.
      */
     public record Days(
             Integer phoneVerifications,
@@ -105,7 +114,8 @@ public record RetentionProperties(
             Integer voiceAnalyses,
             Integer spoofChecks,
             Integer embeddingAccessLogs,
-            Integer voiceprintAccessLogs
+            Integer voiceprintAccessLogs,
+            Integer dangerShares
     ) {
 
         public Days {
@@ -117,18 +127,31 @@ public record RetentionProperties(
             spoofChecks = orDefault(spoofChecks, LEGAL_MINIMUM_ACCESS_LOG_DAYS);
             embeddingAccessLogs = orDefault(embeddingAccessLogs, LEGAL_MINIMUM_ACCESS_LOG_DAYS);
             voiceprintAccessLogs = orDefault(voiceprintAccessLogs, LEGAL_MINIMUM_ACCESS_LOG_DAYS);
+            dangerShares = orDefault(dangerShares, MAX_DANGER_SHARE_DAYS);
 
             validate(Map.of(
                     RetentionTarget.PHONE_VERIFICATIONS, phoneVerifications,
                     RetentionTarget.REFRESH_TOKENS, refreshTokens,
                     RetentionTarget.NOTIFICATIONS, notifications,
+                    RetentionTarget.DANGER_SHARES, dangerShares,
                     RetentionTarget.CALL_EVENTS, callEvents,
                     RetentionTarget.VOICE_ANALYSES, voiceAnalyses,
                     RetentionTarget.SPOOF_CHECKS, spoofChecks,
                     RetentionTarget.EMBEDDING_ACCESS_LOGS, embeddingAccessLogs,
                     RetentionTarget.VOICEPRINT_ACCESS_LOGS, voiceprintAccessLogs,
-                    RetentionTarget.RETIRED_SPOOF_CHECKS, spoofChecks,
+                    RetentionTarget.RETIRED_SPOOF_CHECKS, spoofChecks));
+            // Map.of 는 10쌍까지라 마지막 하나는 따로 검사합니다
+            validate(Map.of(
                     RetentionTarget.RETIRED_VOICEPRINT_ACCESS_LOGS, voiceprintAccessLogs));
+
+            if (dangerShares > MAX_DANGER_SHARE_DAYS) {
+                throw new IllegalStateException("""
+                        위험 통화 공유 보관 기간을 약속한 기간보다 길게 설정할 수 없습니다.
+                          대상:   danger_shares
+                          설정값: %d일
+                          최대:   %d일 (처리방침 \"7일 후 삭제\" · 통화 상대방 번호)"""
+                        .formatted(dangerShares, MAX_DANGER_SHARE_DAYS));
+            }
         }
 
         /**
@@ -141,6 +164,7 @@ public record RetentionProperties(
             map.put(RetentionTarget.PHONE_VERIFICATIONS, phoneVerifications);
             map.put(RetentionTarget.REFRESH_TOKENS, refreshTokens);
             map.put(RetentionTarget.NOTIFICATIONS, notifications);
+            map.put(RetentionTarget.DANGER_SHARES, dangerShares);
             map.put(RetentionTarget.CALL_EVENTS, callEvents);
             map.put(RetentionTarget.VOICE_ANALYSES, voiceAnalyses);
             map.put(RetentionTarget.SPOOF_CHECKS, spoofChecks);
