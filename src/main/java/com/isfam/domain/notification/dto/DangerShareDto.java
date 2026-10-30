@@ -38,4 +38,17 @@ public final class DangerShareDto {
     /** 201 */
     public record CreateResponse(Long shareId) {
     }
+
+    /**
+     * {@code GET /notifications/danger-share/{shareId}} — 200.
+     *
+     * <p>하이픈 없는 숫자입니다({@code users.phone_number} 와 같은 형식). 화면 표시 형식은 앱의 몫입니다.
+     * 요청 객체와 같은 이유로 {@code toString()} 에서 번호를 뺐습니다.
+     */
+    public record PhoneResponse(String phoneNumber) {
+        @Override
+        public String toString() {
+            return "PhoneResponse[phoneNumber=***]";
+        }
+    }
 }

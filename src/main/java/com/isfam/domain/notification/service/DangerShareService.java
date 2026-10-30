@@ -27,14 +27,14 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * 위험 통화 공유 — {@code POST /notifications/danger-share}.
+ * 위험 통화 공유 — {@code POST /notifications/danger-share} · {@code GET /notifications/danger-share/{id}}.
  *
  * <p><b>의심 번호({@code phoneNumber})를 로그·예외 메시지·이벤트에 절대 넣지 마세요.</b>
  * 통화 상대방은 회원이 아니라 동의를 받은 적이 없는 번호입니다. 서버가 이 번호를 받는 근거는
  * 제15조 제1항 제6호(사기 피해 방지)이고, 그 근거가 성립하려면 처리를 최소로 둬야 합니다.
  * DB({@code danger_shares}) 한 곳에만, 7일만 둡니다.
  *
- * <p><b>검사 순서</b> — 형식(400·422) → 권한(403·404) → 중복(409) → 공유 가능 여부(422).
+ * <p><b>공유 검사 순서</b> — 형식(400·422) → 권한(403·404) → 중복(409) → 공유 가능 여부(422).
  * 권한을 공유 가능 여부보다 먼저 보는 이유는, 남의 분석 ID 로 요청했을 때 "정상 판정이라
  * 공유할 수 없어요" 같은 답이 나가면 그 분석의 판정 결과가 새기 때문입니다.
  */
@@ -58,6 +58,8 @@ public class DangerShareService {
     private final NotificationService notificationService;
     private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
+
+    // ── 공유 ────────────────────────────────────────────────
 
     @Transactional
     public DangerShareDto.CreateResponse share(Long senderUserId, DangerShareDto.CreateRequest request) {
@@ -147,6 +149,49 @@ public class DangerShareService {
                 saved.getId(), hasImpersonated ? "impersonated" : "unknown_number", recipients.size());
 
         return new DangerShareDto.CreateResponse(saved.getId());
+    }
+
+    // ── 번호 조회 ───────────────────────────────────────────
+
+    /**
+     * {@code GET /notifications/danger-share/{shareId}}.
+     *
+     * <p>앱이 {@code danger_share} 푸시를 받자마자 <b>한 번</b> 부르고 번호를 폰에 저장합니다.
+     * 이후 화면(알림함 탭 등)은 폰에 저장된 값으로 그립니다.
+     *
+     * <p><b>조회할 수 있는 사람</b> — 공유 시점의 받는 사람과 같습니다.
+     * <ul>
+     *   <li>그 공간의 <b>현재</b> active 멤버. 공유 뒤 나갔으면 더 받지 못합니다</li>
+     *   <li>공유 <b>전에</b> 들어온 사람. 공유는 그 시점의 멤버 전원에게 간 것이라, 뒤에 들어온
+     *       사람은 받는 사람이 아닙니다. 나갔다 다시 들어온 사람도 {@code joined_at} 이 재참여
+     *       시각으로 바뀌므로 같은 규칙으로 걸러집니다</li>
+     * </ul>
+     *
+     * <p><b>막히는 이유를 나누지 않습니다 — 전부 404.</b> 403 과 404 를 구분하면
+     * "그 share_id 의 공유는 존재한다"가 새어 나갑니다.
+     *
+     * <p>7일이 지났으면 파기 배치가 행을 지우기 전이라도 404 입니다. 배치는 하루 한 번이라
+     * 최대 하루 늦게 지워지는데, 그동안 조회까지 열어 두면 보관 기간이 사실상 8일이 됩니다.
+     */
+    @Transactional(readOnly = true)
+    public DangerShareDto.PhoneResponse getPhoneNumber(Long requesterUserId, Long shareId) {
+        Instant now = clock.instant();
+
+        DangerShare share = dangerShareRepository.findById(shareId)
+                .filter(found -> found.isReadableAt(now))
+                .filter(DangerShare::hasPhoneNumber)
+                .orElseThrow(() -> new BusinessException(ErrorCode.SHARE_005));
+
+        boolean allowed = membershipRepository
+                .findByFamilyIdAndUserIdAndStatus(share.getFamilyId(), requesterUserId, ACTIVE)
+                .filter(membership -> !membership.getJoinedAt().isAfter(share.getCreatedAt()))
+                .isPresent();
+        if (!allowed) {
+            throw new BusinessException(ErrorCode.SHARE_005);
+        }
+
+        log.debug("위험 통화 공유 번호 조회 — shareId={}", shareId);
+        return new DangerShareDto.PhoneResponse(share.getPhoneNumber());
     }
 
     // ── 내부 ────────────────────────────────────────────────
