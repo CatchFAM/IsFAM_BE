@@ -31,8 +31,7 @@ public class UserAgreement {
     /**
      * 동의 항목. 법 제23조상 민감정보 처리와 제3자 제공은 별도 항목이어야 합니다.
      *
-     * <p>가입 시 6종이 한꺼번에 기록됩니다(AuthService.saveAgreements).
-     * {@code VOICE_SHARING} 만 가입이 아니라 가족 공간 참여 시점에 따로 기록됩니다(InvitationService).
+     * <p>가입 시 7종이 한꺼번에 기록됩니다(AuthService.saveAgreements).
      *
      * <p><b>값을 추가할 때는 DB 제약도 함께 고치세요.</b> Hibernate 가 테이블을 만들 때
      * {@code agreement_type} 에 {@code CHECK (... IN (...))} 를 붙이고,
@@ -52,13 +51,15 @@ public class UserAgreement {
         /** 마케팅 수신 (선택) */
         MARKETING,
         /**
-         * 음성 제3자 제공 (공간 참여 시 필수) — 내 임베딩이 가족 기기로 복제되는 것 (P-07).
+         * 음성 제3자 제공 (가입 시 필수) — 내 임베딩이 가족 기기로 복제되는 것 (P-07).
          *
-         * <p>한 사람에게 여러 행이 생길 수 있습니다 — 공간을 나갔다 다시 들어오면 새로 동의받고
-         * 새로 기록합니다(지난번 동의로 이번 제공이 커버되지 않음, FamilyMembership.rejoin).
+         * <p><b>가입 때 한 번</b> 받습니다. 받는 사람은 "내가 참여하는 가족 공간의 현재 및 향후 구성원"이고,
+         * 공간을 만들거나 다른 공간에 들어가도 새로 받지 않습니다 — PHONE_SHARING 과 같은 구조입니다.
+         * 가입 화면에서는 VOICE_PRINT 와 <b>다른 줄</b>이어야 합니다(제23조, 민감정보는 다른 동의와 섞지 않음).
          *
-         * <p>{@code family_memberships.voice_sharing_consented_at} 은 배포 게이팅용으로 그대로 둡니다.
-         * 그 컬럼은 "지금 동의 상태인가"를, 이 행은 "언제 어떤 문구에 동의했나"를 답합니다.
+         * <p>공간을 만들거나 초대를 수락할 때 이 행(agreed=true)이 있어야
+         * {@code family_memberships.voice_sharing_consented_at} 이 채워지고 목소리가 배포됩니다.
+         * 그 컬럼은 "이 공간에서 지금 공유 중인가"를, 이 행은 "언제 어떤 문구에 동의했나"를 답합니다.
          */
         VOICE_SHARING,
         /**
@@ -68,7 +69,7 @@ public class UserAgreement {
          * 채웁니다. 앱은 걸려온 번호가 이 값과 같을 때만 위험 공유의 {@code impersonated_user_id} 를
          * 채웁니다 — 목소리 유사도로는 채우지 않습니다.
          *
-         * <p>{@code VOICE_SHARING} 과 달리 <b>가입 때 한 번</b> 받고, 공간을 나가거나 다시 들어가도
+         * <p>VOICE_SHARING 과 마찬가지로 <b>가입 때 한 번</b> 받고, 공간을 나가거나 다시 들어가도
          * 새로 받지 않습니다. 철회는 회원 탈퇴입니다. 공간을 나가면 번호가 더 내려가지 않는 건
          * active 멤버만 조회하기 때문이지 동의 철회가 아닙니다.
          */

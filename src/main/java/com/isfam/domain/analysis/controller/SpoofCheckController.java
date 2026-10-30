@@ -5,6 +5,8 @@ import com.isfam.common.security.DeviceId;
 import com.isfam.common.web.ClientIpResolver;
 import com.isfam.domain.analysis.dto.SpoofCheckDto;
 import com.isfam.domain.analysis.service.SpoofCheckService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -30,6 +32,7 @@ import org.springframework.web.multipart.MultipartFile;
  *
  * <p><b>IP 해석은 Phase 12 에서 {@link ClientIpResolver} 로 옮겼습니다</b>(P-16).
  */
+@Tag(name = "spoof check", description = "통화녹음 딥보이스 판정")
 @RestController
 @RequiredArgsConstructor
 public class SpoofCheckController {
@@ -42,6 +45,7 @@ public class SpoofCheckController {
      * <p>{@code X-Device-Id} 를 요구하는 이유는 {@code spoof_checks.device_id} 때문입니다.
      * "어느 기기에서 음성이 올라왔는가"가 접속기록의 항목입니다.
      */
+    @Operation(summary = "통화녹음 딥보이스 판정")
     @PostMapping(
             value = "/call-events/{callEventId}/spoof-check",
             consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

@@ -42,11 +42,8 @@ import java.util.Set;
  * 방금 카톡으로 보낸 링크가 죽어서, 받는 쪽에는 "만료된 초대예요"만 뜹니다.
  * 서버가 막을 수 있는 실수는 아니라 문서와 주석으로 계속 표시해 둡니다.
  *
- * <p><b>Phase 14 — 음성 제3자 제공 동의를 이력으로 남깁니다</b>(P-07).
- * 동의가 들어오는 곳은 이 클래스의 두 지점뿐입니다 — 초대 수락({@link #accept})과
- * owner 의 링크 발급({@link #issueInviteCode}). 전에는 {@code family_memberships} 에 시각
- * 하나만 남아 "어떤 문구에 동의했나"를 답할 수 없었습니다(L5-e). 제3자 제공은 분쟁 가능성이
- * 가장 높은 동의라, 가입 동의와 같은 모양으로 {@code user_agreements} 에 버전과 함께 기록합니다.
+ * <p><b>음성 공유 동의는 여기서 받지 않습니다.</b> 가입 때 받은 동의(user_agreements.VOICE_SHARING)로
+ * 수락하는 순간 공유를 켭니다. 동의 이력도 가입 때 이미 남아 있어 여기서 새로 기록하지 않습니다.
  */
 @Slf4j
 @Service
@@ -54,13 +51,6 @@ import java.util.Set;
 public class InvitationService {
 
     private static final FamilyMembership.Status ACTIVE = FamilyMembership.Status.ACTIVE;
-
-    /**
-     * 음성 제3자 제공 동의 문구 버전. <b>동의 화면 문구가 바뀌면 올리세요.</b>
-     * 가입 약관 버전(AuthService)과 따로 두는 이유는 이 문구만 따로 바뀔 수 있어서입니다 —
-     * 예를 들어 "현재 및 향후 구성원"(P-02) 반영처럼.
-     */
-    private static final String VOICE_SHARING_AGREEMENT_VERSION = "v1.0";
 
     private final FamilyRepository familyRepository;
     private final FamilyMembershipRepository membershipRepository;
@@ -114,9 +104,11 @@ public class InvitationService {
      *
      * <p>QR 은 코드 기반이라 URL 이 함께 갱신됩니다. 이미지 자체는 이 서버가 만들지 않고
      * {@code qr_code_url} 로 위임합니다.
+     *
+     * <p>owner 의 음성 공유는 공간을 만들 때 이미 켜져 있어(FamilyService.create) 여기서 다루지 않습니다.
      */
     @Transactional
-    public InvitationDto.InviteCodeResponse issueInviteCode(Long userId, Boolean voiceSharingConsent) {
+    public InvitationDto.InviteCodeResponse issueInviteCode(Long userId) {
         Instant now = clock.instant();
 
         FamilyMembership myMembership = findMyActiveMembership(userId);
@@ -124,18 +116,6 @@ public class InvitationService {
 
         family.rotateInviteCode(
                 inviteCodeGenerator.generate(), now, Duration.ofHours(codeTtlHours));
-
-        // [명세 확장] 링크를 만드는 사람의 제3자 제공 동의. 보내지 않으면 아무것도 기록하지 않습니다.
-        // 공간 생성자(owner)가 동의를 남길 수 있는 유일한 지점입니다 — 자세한 배경은
-        // FamilyMembership.voiceSharingConsentedAt 주석 참고.
-        //
-        // 이미 동의한 상태면 이력도 다시 남기지 않습니다. 링크를 돌릴 때마다 true 가 오는데,
-        // 그때마다 행이 쌓이면 "실제로 동의를 받은 시점"이 묻힙니다.
-        if (Boolean.TRUE.equals(voiceSharingConsent)
-                && myMembership.getVoiceSharingConsentedAt() == null) {
-            myMembership.consentVoiceSharing(now);
-            recordVoiceSharingConsent(userId, now);
-        }
 
         return toInviteCodeResponse(family);
     }
@@ -189,12 +169,11 @@ public class InvitationService {
      * <p><b>검사 순서가 응답 품질을 결정합니다.</b>
      * <ol>
      *   <li>코드 유효성 (404 / 410 INVITE_001) — 재시도해도 소용없는 상태를 먼저 알립니다</li>
-     *   <li>동의 여부 (422 INVITE_003)</li>
      *   <li>이 공간의 active 멤버인가 (409 INVITE_002)</li>
      *   <li>다른 공간 소속인가 (409 FAMILY_004)</li>
      *   <li>정원 (409 FAMILY_006)</li>
      * </ol>
-     * 3 이 4 보다 먼저여야 합니다. 이미 이 공간 멤버인 사람은 두 조건을 동시에 만족하는데,
+     * 2 가 3 보다 먼저여야 합니다. 이미 이 공간 멤버인 사람은 두 조건을 동시에 만족하는데,
      * FAMILY_004 를 먼저 보면 앱이 "'우리 가족'을 나가고 수락할까요?"를 띄웁니다 —
      * 지금 있는 그 공간에 다시 들어가려고 나가라는 안내가 됩니다.
      *
@@ -202,7 +181,7 @@ public class InvitationService {
      * {@code sync_trigger: "joined"} 로 기록합니다.
      */
     @Transactional
-    public InvitationDto.AcceptResponse accept(Long userId, String rawCode, Boolean voiceSharingConsent) {
+    public InvitationDto.AcceptResponse accept(Long userId, String rawCode) {
         Instant now = clock.instant();
 
         // 정원 검사를 안전하게 하려면 여기서 공간을 잠가야 합니다 — FamilyRepository 주석 참고
@@ -211,12 +190,6 @@ public class InvitationService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.INVITE_001));
 
         requireActiveInviteCode(family, now);
-
-        // 제3자 제공 동의는 법 제23조상 필수라 없으면 진행 자체가 불가능합니다.
-        // false 와 누락(null)을 같게 다룹니다 — 둘 다 "동의를 받지 못한" 상태입니다.
-        if (!Boolean.TRUE.equals(voiceSharingConsent)) {
-            throw new BusinessException(ErrorCode.INVITE_003);
-        }
 
         // status 를 안 보고 조회합니다. 나갔던 사람이 다시 들어오는 경로가 여기입니다.
         Optional<FamilyMembership> existing =
@@ -234,12 +207,22 @@ public class InvitationService {
             throw new BusinessException(ErrorCode.FAMILY_006);
         }
 
+        // ── 음성 공유 시작 ──────────────────────────────────
+        // 가입 때 받은 동의의 받는 사람이 "내가 참여하는 가족 공간의 현재 및 향후 구성원"이라,
+        // 수락하는 순간 이 공간이 그 대상이 됩니다. 공유 시작 시각 = 참여 시각입니다.
+        // 동의 행이 없으면 null 로 두고 배포하지 않습니다(EmbeddingSyncService 게이팅) —
+        // 가입에서 필수라 정상 흐름에선 생기지 않지만, 동의 없는 제3자 제공을 만들지 않기 위한 방어입니다.
+        Instant voiceSharingConsentedAt = userAgreementRepository
+                .existsByUserIdAndAgreementTypeAndAgreedTrue(userId, UserAgreement.Type.VOICE_SHARING)
+                ? now : null;
+
         FamilyMembership membership = existing
                 .map(found -> {
-                    found.rejoin(now, now);
+                    found.rejoin(voiceSharingConsentedAt, now);
                     return found;
                 })
-                .orElseGet(() -> FamilyMembership.join(family.getId(), userId, now, now));
+                .orElseGet(() -> FamilyMembership.join(
+                        family.getId(), userId, voiceSharingConsentedAt, now));
 
         try {
             membershipRepository.saveAndFlush(membership);
@@ -248,12 +231,6 @@ public class InvitationService {
             // 부분 유니크 인덱스(uq_membership_active_user)가 잡아줍니다.
             throw new BusinessException(ErrorCode.FAMILY_004);
         }
-
-        // ── 동의 이력 (P-07) ─────────────────────────────────
-        // 멤버십이 확정된 뒤에 남깁니다. 앞에서 남기면 FAMILY_004 경합으로 수락이 실패해도
-        // (같은 트랜잭션이라 롤백되긴 하지만) 읽는 사람이 순서를 오해합니다.
-        // 게이팅 값(membership.voiceSharingConsentedAt)과 같은 시각 now 입니다 — 두 기록이 어긋나지 않게.
-        recordVoiceSharingConsent(userId, now);
 
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.AUTH_009));
@@ -291,20 +268,6 @@ public class InvitationService {
     }
 
     // ── 내부 ────────────────────────────────────────────────
-
-    /**
-     * 음성 제3자 제공 동의 1행 (P-07). 호출하는 트랜잭션에 함께 묶입니다 —
-     * 기록이 실패하면 동의(게이팅 값)도 롤백되어, 기록 없는 동의 상태가 생기지 않습니다.
-     *
-     * <p>거부(false)는 남기지 않습니다. 수락에서는 거부하면 INVITE_003 으로 트랜잭션 전체가
-     * 롤백되고, 링크 발급에서는 동의 없이도 발급은 진행되는 선택 입력이라 "물었다"는 사실이
-     * 서버에서 확정되지 않습니다.
-     */
-    private void recordVoiceSharingConsent(Long userId, Instant now) {
-        userAgreementRepository.save(UserAgreement.of(
-                userId, UserAgreement.Type.VOICE_SHARING, true,
-                VOICE_SHARING_AGREEMENT_VERSION, now));
-    }
 
     /** 방금 들어온 본인까지 포함한 active 멤버 전원 */
     private Set<Long> collectSyncTargets(Long familyId) {

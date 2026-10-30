@@ -72,8 +72,10 @@ public class FamilyService {
      * <p>이미 다른 공간에 소속돼 있으면 FAMILY_004 입니다. 앱은 여기서
      * "'○○네 가족'을 나가고 만들까요?" 로 분기합니다.
      *
-     * <p>voice_sharing_consent 는 요청에 없어 동의 시각을 null 로 둡니다 —
-     * 이유는 {@link FamilyMembership#createOwner} 주석 참고.
+     * <p><b>owner 도 만드는 순간부터 목소리를 공유합니다.</b> 가입 때 받은 음성 공유 동의의
+     * 받는 사람이 "내가 참여하는 가족 공간의 현재 및 향후 구성원"이라, 공간을 만들면 이 공간이
+     * 그 대상이 됩니다. 동의 행이 없으면 null 로 두고 배포하지 않습니다
+     * ({@code EmbeddingSyncService} 게이팅).
      */
     @Transactional
     public FamilyDto.FamilyResponse create(Long userId, String name) {
@@ -83,11 +85,15 @@ public class FamilyService {
             throw new BusinessException(ErrorCode.FAMILY_004);
         }
 
+        Instant voiceSharingConsentedAt = userAgreementRepository
+                .existsByUserIdAndAgreementTypeAndAgreedTrue(userId, UserAgreement.Type.VOICE_SHARING)
+                ? now : null;
+
         Family family = familyRepository.save(Family.create(name, userId));
 
         try {
-            membershipRepository.saveAndFlush(
-                    FamilyMembership.createOwner(family.getId(), userId, now));
+            membershipRepository.saveAndFlush(FamilyMembership.createOwner(
+                    family.getId(), userId, voiceSharingConsentedAt, now));
         } catch (DataIntegrityViolationException e) {
             // 위 검사와 insert 사이에 다른 요청이 끼어든 경우.
             // 부분 유니크 인덱스(uq_membership_active_user)가 잡아줍니다.

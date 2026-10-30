@@ -5,6 +5,8 @@ import com.isfam.common.security.DeviceId;
 import com.isfam.common.web.ClientIpResolver;
 import com.isfam.domain.voice.dto.EmbeddingSyncDto;
 import com.isfam.domain.voice.service.EmbeddingSyncService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,6 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
  * 여기밖에 없습니다. {@code ClientIpResolver.resolveCurrent()} 로 서비스 안에서 꺼낼 수도
  * 있지만, 파라미터로 넘기면 의존성이 드러나고 테스트에서 IP 를 주입하기 쉽습니다.
  */
+@Tag(name = "family embedding sync", description = "가족 임베딩 동기화")
 @RestController
 @RequiredArgsConstructor
 public class EmbeddingSyncController {
@@ -45,6 +48,7 @@ public class EmbeddingSyncController {
      * 제공 기록 저장이 실패하면 이 API 는 임베딩을 내보내지 않고 500 을 냅니다(P-16) —
      * "기록 없는 제공"을 만들지 않기 위해서입니다. 404 와 달리 회수 신호가 아닙니다.
      */
+    @Operation(summary = "가족 구성원들의 임베딩 다운로드")
     @GetMapping("/family/embeddings")
     public EmbeddingSyncDto.EmbeddingsResponse getFamilyEmbeddings(
             @CurrentUser Long userId,

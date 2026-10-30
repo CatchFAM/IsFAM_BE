@@ -8,6 +8,8 @@ import com.isfam.domain.auth.service.WithdrawalService;
 import com.isfam.common.security.AuthPrincipal;
 import com.isfam.common.security.CurrentUser;
 import com.isfam.common.web.ClientIpResolver;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /** /auth/** — 번호 인증 · 가입 · 로그인 · 세션 · 내 정보 · 탈퇴 */
+@Tag(name = "auth", description = "번호 인증 · 회원가입 · 로그인 · 세션 · 내 정보 · 탈퇴")
 @RestController
 @RequestMapping("/auth")
 @RequiredArgsConstructor
@@ -34,6 +37,7 @@ public class AuthController {
     // ── 번호 인증 (비인증) ──────────────────────────────────
 
     /** 인증번호 발송. 데모에서는 실제 SMS 없이 123456 고정 */
+    @Operation(summary = "인증번호 발송")
     @PostMapping("/phone/send")
     public PhoneVerificationDto.SendResponse sendCode(
             @Valid @RequestBody PhoneVerificationDto.SendRequest request) {
@@ -41,6 +45,7 @@ public class AuthController {
     }
 
     /** 인증번호 확인 → phone_verification_token(5분·1회용) 발급 */
+    @Operation(summary = "인증번호 확인")
     @PostMapping("/phone/verify")
     public PhoneVerificationDto.VerifyResponse verifyCode(
             @Valid @RequestBody PhoneVerificationDto.VerifyRequest request) {
@@ -49,23 +54,27 @@ public class AuthController {
 
     // ── 가입 · 로그인 (비인증) ──────────────────────────────
 
+    @Operation(summary = "회원가입")
     @PostMapping("/signup")
     @ResponseStatus(HttpStatus.CREATED)
     public AuthDto.TokenResponse signup(@Valid @RequestBody AuthDto.SignupRequest request) {
         return authService.signup(request);
     }
 
+    @Operation(summary = "로그인")
     @PostMapping("/login")
     public AuthDto.TokenResponse login(@Valid @RequestBody AuthDto.LoginRequest request) {
         return authService.login(request);
     }
 
+    @Operation(summary = "액세스 토큰 재발급")
     @PostMapping("/refresh")
     public AuthDto.TokenResponse refresh(@Valid @RequestBody AuthDto.RefreshRequest request) {
         return authService.refresh(request.refreshToken());
     }
 
     /** 비밀번호 재설정. 비밀번호를 잊은 상태라 access_token 없이 호출됩니다 */
+    @Operation(summary = "비밀번호 재설정")
     @PutMapping("/password")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void resetPassword(@Valid @RequestBody AuthDto.PasswordResetRequest request) {
@@ -75,6 +84,7 @@ public class AuthController {
     // ── 세션 · 내 정보 (인증 필요) ──────────────────────────
 
     /** 현재 세션만 종료. 다른 기기는 유지됩니다 */
+    @Operation(summary = "로그아웃")
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void logout(@CurrentUser AuthPrincipal principal,
@@ -83,6 +93,7 @@ public class AuthController {
                 request == null ? null : request.refreshToken());
     }
 
+    @Operation(summary = "사용자 정보 조회")
     @GetMapping("/me")
     public AuthDto.MeResponse getMe(@CurrentUser Long userId) {
         return authService.getMe(userId);
@@ -95,6 +106,7 @@ public class AuthController {
      * 짰을 때 405 가 납니다. 회원 탈퇴({@code DELETE /auth/me})도 같은 경로에
      * 메서드만 달리해 붙습니다.
      */
+    @Operation(summary = "닉네임 수정")
     @PutMapping("/me")
     public AuthDto.DisplayNameResponse updateDisplayName(
             @CurrentUser Long userId,
@@ -125,6 +137,7 @@ public class AuthController {
      * <p>{@code HttpServletRequest} 는 파기 기록의 "접속지"(고시 제8조) 때문입니다 —
      * 생체정보를 지운 행위의 접속기록이 {@code voiceprint_access_logs} 에 남습니다(P-28).
      */
+    @Operation(summary = "회원 탈퇴")
     @DeleteMapping("/me")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void withdraw(@CurrentUser Long userId,

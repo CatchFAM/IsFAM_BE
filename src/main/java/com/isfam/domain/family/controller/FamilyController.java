@@ -3,6 +3,8 @@ package com.isfam.domain.family.controller;
 import com.isfam.common.security.CurrentUser;
 import com.isfam.domain.family.dto.FamilyDto;
 import com.isfam.domain.family.service.FamilyService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -24,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>초대 관련 엔드포인트({@code /family/invite-code})는 Phase 4 에서 별도 컨트롤러로 붙습니다.
  */
+@Tag(name = "family", description = "가족 공간 · 구성원")
 @RestController
 @RequestMapping("/family")
 @RequiredArgsConstructor
@@ -32,6 +35,7 @@ public class FamilyController {
     private final FamilyService familyService;
 
     /** 누구나 만들 수 있고, 생성자가 owner 가 됩니다 */
+    @Operation(summary = "가족 공간 생성")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public FamilyDto.FamilyResponse create(@CurrentUser Long userId,
@@ -40,11 +44,13 @@ public class FamilyController {
     }
 
     /** 404 FAMILY_002 면 앱이 "공간 만들기 / 초대 코드 입력" 화면으로 분기합니다 */
+    @Operation(summary = "내 공간 + 가족 목록")
     @GetMapping
     public FamilyDto.FamilyResponse getMyFamily(@CurrentUser Long userId) {
         return familyService.getMyFamily(userId);
     }
 
+    @Operation(summary = "공간이름 수정")
     @PutMapping
     public FamilyDto.UpdateNameResponse rename(
             @CurrentUser Long userId,
@@ -53,6 +59,7 @@ public class FamilyController {
     }
 
     /** owner 전용. 본인 외 active 멤버가 남아 있으면 409 FAMILY_007 */
+    @Operation(summary = "공간 삭제")
     @DeleteMapping
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@CurrentUser Long userId) {
@@ -64,6 +71,7 @@ public class FamilyController {
      *
      * <p>owner 는 개별 탈퇴가 안 됩니다(409 FAMILY_005) — 전원 내보낸 뒤 DELETE /family 입니다.
      */
+    @Operation(summary = "나가기/내보내기")
     @DeleteMapping("/members/{userId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void removeMember(@CurrentUser Long currentUserId,
@@ -80,6 +88,7 @@ public class FamilyController {
      * <p>alias 가 null 이거나 공백뿐이면 해제입니다 — 별도 DELETE 엔드포인트를 두지 않은 건
      * 앱의 "입력란 비우고 저장" 흐름이 그대로 해제가 되기 때문입니다.
      */
+    @Operation(summary = "멤버 별명 지정·해제")
     @PutMapping("/members/{userId}/alias")
     public FamilyDto.UpdateAliasResponse updateAlias(
             @CurrentUser Long currentUserId,

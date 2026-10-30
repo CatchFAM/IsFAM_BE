@@ -30,4 +30,13 @@ public interface UserAgreementRepository extends JpaRepository<UserAgreement, Lo
             """)
     List<Long> findAgreedUserIds(@Param("userIds") Collection<Long> userIds,
                                  @Param("type") UserAgreement.Type type);
+
+    /**
+     * 해당 항목에 동의했는가.
+     *
+     * <p>공간 생성·초대 수락에서 {@code VOICE_SHARING} 으로 목소리 공유 시작 여부를 판정할 때 씁니다.
+     * 가입에서 필수라 정상 계정이면 항상 true 입니다. false 면 동의 근거가 없는 것이므로
+     * 공유를 켜지 않습니다(동의 없는 제3자 제공 방지).
+     */
+    boolean existsByUserIdAndAgreementTypeAndAgreedTrue(Long userId, UserAgreement.Type agreementType);
 }

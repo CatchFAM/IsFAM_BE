@@ -37,8 +37,9 @@ public final class AuthDto {
      * 누락·false 모두 AUTH_010 입니다 — "만 14세 이상임을 확인받지 못한 상태"는
      * 14세 미만과 똑같이 다뤄야 합니다. 생년월일은 받지 않습니다(최소 수집).
      *
-     * <p><b>{@code phoneSharingAgreed} 도 {@code @NotNull} 이 없습니다.</b> 필드를 모르는
-     * 구버전 앱이 COMMON_002 가 아니라 AUTH_007 을 받게 하기 위해서입니다 — privacyAgreed 와 같은 판단.
+     * <p><b>{@code voiceSharingAgreed} · {@code phoneSharingAgreed} 도 {@code @NotNull} 이 없습니다.</b>
+     * 필드를 모르는 구버전 앱이 COMMON_002 가 아니라 AUTH_007 을 받게 하기 위해서입니다 —
+     * privacyAgreed 와 같은 판단.
      */
     public record SignupRequest(
             @NotBlank(message = "휴대폰 번호를 입력해 주세요")
@@ -72,6 +73,14 @@ public final class AuthDto {
             /** 개인정보 처리방침 (필수). null·false 모두 AUTH_007 */
             Boolean privacyAgreed,
             @NotNull Boolean voicePrintAgreed,
+            /**
+             * 음성 정보를 가족과 공유 (필수). null·false 모두 AUTH_007.
+             * JSON 이름은 {@code voice_sharing_agreed}.
+             *
+             * <p>{@code voicePrintAgreed}(서버가 내 음성을 처리)와 <b>별개 동의</b>입니다 —
+             * 이건 그 결과물을 가족 기기로 넘기는 제3자 제공입니다. 가입 화면에서도 다른 줄이어야 합니다.
+             */
+            Boolean voiceSharingAgreed,
             /**
              * 가족과 전화번호 공유 (필수). null·false 모두 AUTH_007.
              * JSON 이름은 {@code phone_sharing_agreed} — 다른 가입 동의 필드와 같이 {@code _agreed} 로 끝납니다.
