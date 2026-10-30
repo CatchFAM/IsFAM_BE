@@ -47,7 +47,7 @@ public class NotificationService {
      */
     @Transactional
     public Notification create(Notification notification) {
-        Notification saved = notificationRepository.saveAndFlush(notification);
+        Notification saved = createWithoutPush(notification);
 
         eventPublisher.publishEvent(new UserNotificationEvent(
                 saved.getUserId(),
@@ -58,6 +58,18 @@ public class NotificationService {
                 saved.getTargetId()));
 
         return saved;
+    }
+
+    /**
+     * 알림함에만 저장하고 <b>일반 푸시 이벤트를 발행하지 않습니다.</b>
+     *
+     * <p>자기 전용 푸시가 따로 있는 알림이 씁니다 — 지금은 {@code danger_share} 하나입니다.
+     * {@link #create} 를 쓰면 일반 알림 푸시와 전용 푸시가 둘 다 나가 같은 일로 푸시가 두 번 갑니다.
+     * 호출부가 반환된 {@code id} 를 자기 이벤트에 실어 보내야 합니다.
+     */
+    @Transactional
+    public Notification createWithoutPush(Notification notification) {
+        return notificationRepository.saveAndFlush(notification);
     }
 
     /** 가족 멤버 전원처럼 여러 건을 한 번에. 각각 푸시 이벤트가 발행됩니다 */
