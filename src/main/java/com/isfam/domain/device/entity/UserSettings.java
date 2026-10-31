@@ -1,6 +1,7 @@
 package com.isfam.domain.device.entity;
 
 import com.isfam.common.entity.BaseTimeEntity;
+import com.isfam.domain.notification.entity.Notification;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
@@ -30,8 +31,9 @@ import org.springframework.data.domain.Persistable;
  *   <li>하나를 켜면 마스터도 ON, 셋을 다 끄면 마스터도 OFF — 계산값이라 자동으로 맞습니다</li>
  * </ul>
  *
- * <p><b>알림함 규칙</b>(3단계에서 적용) — 토글 OFF 는 "푸시만 안 감, 알림함엔 쌓임"입니다.
- * 예외는 안전 하나로, 안전 OFF 면 알림함에도 남기지 않습니다(정상 통화마다 쌓이므로).
+ * <p><b>알림함 규칙</b> — 토글 OFF 는 "푸시만 안 감, 알림함엔 쌓임"입니다({@link #allowsPush}).
+ * 예외는 안전 하나로, 안전 OFF 면 알림함에도 남기지 않습니다(정상 통화마다 쌓이므로,
+ * {@code VoiceAnalysisService} 가 판단).
  *
  * <p><b>{@link Persistable} 을 구현한 이유.</b> PK 를 직접 넣는 엔티티라 그냥 {@code save()} 하면
  * Spring Data 가 기존 행으로 보고 merge 합니다. 같은 사용자 행이 이미 있으면 조용히 덮어쓰게 되니,
@@ -108,6 +110,32 @@ public class UserSettings extends BaseTimeEntity implements Persistable<Long> {
     /** 통화분석 알림(마스터) — 셋 중 하나라도 켜져 있으면 ON */
     public boolean isAnalysisNotificationEnabled() {
         return dangerNotificationEnabled || needsCheckNotificationEnabled || normalNotificationEnabled;
+    }
+
+    /**
+     * 이 종류의 알림을 <b>푸시로</b> 보내도 되는가 (3단계, {@code PushDispatcher} 가 사용).
+     *
+     * <p>알림함 생성 여부와는 별개입니다 — 꺼져 있어도 알림함에는 남습니다.
+     * 예외인 안전 결과는 꺼져 있으면 애초에 알림함 행이 만들어지지 않아 여기까지 오지 않습니다.
+     *
+     * <p>{@code switch} 를 빠짐없이 쓴 이유 — 알림 종류가 늘면 컴파일이 깨져서
+     * 어느 토글에 묶을지 반드시 정하게 됩니다. {@code default} 를 두면 새 알림이 조용히
+     * 모든 사용자에게 나갑니다.
+     *
+     * <p>가족 소식에는 이후 암호문 변경·관리자 위임 알림이 추가될 예정입니다.
+     */
+    public boolean allowsPush(Notification.Type type) {
+        return switch (type) {
+            case DANGER_CALL -> dangerNotificationEnabled;
+            case NEEDS_CHECK_CALL -> needsCheckNotificationEnabled;
+            case NORMAL_CALL -> normalNotificationEnabled;
+            // VOICEPRINT_REGISTERED 는 더 이상 만들지 않지만, 남아 있다면 가족 소식 성격입니다
+            case MEMBER_JOINED, MEMBER_LEFT, VOICEPRINT_REGISTERED -> familyNewsEnabled;
+            // 위험 공유는 전용 data-only 푸시로만 나가고 이 값은 show_notification 에 쓰입니다
+            case DANGER_SHARE -> dangerShareEnabled;
+            // 발송 지점이 없는 예약 값. 생기면 토글을 정하세요
+            case PROTECTION_WARNING -> true;
+        };
     }
 
     // ── 변경 ────────────────────────────────────────────────

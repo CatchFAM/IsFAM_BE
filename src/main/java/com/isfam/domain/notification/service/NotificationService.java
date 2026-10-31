@@ -41,6 +41,10 @@ public class NotificationService {
      * <p>반대로 <b>푸시는 커밋 후에</b> 나갑니다 — 여기서 발행하는 이벤트를
      * {@code PushDispatcher} 가 {@code AFTER_COMMIT} 으로 받습니다.
      *
+     * <p><b>알림함은 항상 남기고, 푸시를 보낼지는 {@code PushDispatcher} 가 정합니다.</b>
+     * 사용자가 알림 토글을 꺼도 끄는 건 푸시뿐입니다(알림 설정 세분화). 그래서 여기서는
+     * 설정을 보지 않고 이벤트에 {@code type} 만 실어 보냅니다.
+     *
      * <p>{@code saveAndFlush} 인 이유는 {@code notification_id} 가 필요해서입니다.
      * 앱이 푸시를 탭했을 때 {@code PUT /notifications/&#123;id&#125;/read} 를 부르려면
      * 페이로드에 ID 가 들어 있어야 하는데, flush 전에는 ID 가 null 입니다.
@@ -52,6 +56,7 @@ public class NotificationService {
         eventPublisher.publishEvent(new UserNotificationEvent(
                 saved.getUserId(),
                 saved.getId(),
+                saved.getType(),
                 saved.getTitle(),
                 saved.getBody(),
                 saved.getTargetType().toJson(),
