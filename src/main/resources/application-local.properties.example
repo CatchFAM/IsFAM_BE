@@ -1,3 +1,4 @@
 spring.datasource.username=postgres
 spring.datasource.password=본인_postgres_비번
 isfam.crypto.embedding-key=
+isfam.crypto.passphrase-key=
