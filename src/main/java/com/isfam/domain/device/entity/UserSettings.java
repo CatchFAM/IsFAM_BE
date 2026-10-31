@@ -72,7 +72,7 @@ public class UserSettings extends BaseTimeEntity implements Persistable<Long> {
     @Column(name = "normal_notification_enabled", nullable = false)
     private boolean normalNotificationEnabled;
 
-    /** 가족 소식 — 구성원 참여·탈퇴 (이후 암호문 변경·관리자 위임 추가 예정) */
+    /** 가족 소식 — 구성원 참여·탈퇴 · 우리 집 암호 등록·수정 (이후 관리자 위임 추가 예정) */
     @ColumnDefault("true")
     @Column(name = "family_news_enabled", nullable = false)
     private boolean familyNewsEnabled;
@@ -122,7 +122,7 @@ public class UserSettings extends BaseTimeEntity implements Persistable<Long> {
      * 어느 토글에 묶을지 반드시 정하게 됩니다. {@code default} 를 두면 새 알림이 조용히
      * 모든 사용자에게 나갑니다.
      *
-     * <p>가족 소식에는 이후 암호문 변경·관리자 위임 알림이 추가될 예정입니다.
+     * <p>가족 소식에는 이후 관리자 위임 알림이 추가될 예정입니다.
      */
     public boolean allowsPush(Notification.Type type) {
         return switch (type) {
@@ -130,7 +130,7 @@ public class UserSettings extends BaseTimeEntity implements Persistable<Long> {
             case NEEDS_CHECK_CALL -> needsCheckNotificationEnabled;
             case NORMAL_CALL -> normalNotificationEnabled;
             // VOICEPRINT_REGISTERED 는 더 이상 만들지 않지만, 남아 있다면 가족 소식 성격입니다
-            case MEMBER_JOINED, MEMBER_LEFT, VOICEPRINT_REGISTERED -> familyNewsEnabled;
+            case MEMBER_JOINED, MEMBER_LEFT, VOICEPRINT_REGISTERED, PASSPHRASE_UPDATED -> familyNewsEnabled;
             // 위험 공유는 전용 data-only 푸시로만 나가고 이 값은 show_notification 에 쓰입니다
             case DANGER_SHARE -> dangerShareEnabled;
             // 발송 지점이 없는 예약 값. 생기면 토글을 정하세요
