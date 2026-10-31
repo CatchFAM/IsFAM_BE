@@ -51,6 +51,16 @@ public enum ErrorCode {
      */
     VOICE_002(HttpStatus.UNPROCESSABLE_ENTITY, "분석할 수 없는 음성이에요"),
 
+    /**
+     * 통화 종료 후 자동 분석이 꺼져 있음 (알림 설정 세분화 5단계).
+     *
+     * <p>{@code POST /call-events} · {@code POST /call-events/&#123;id&#125;/spoof-check} ·
+     * {@code POST /voice-analyses} 가 냅니다. 사용자가 분석 자체를 끈 상태라 <b>재시도 금지</b>입니다.
+     * 앱은 설정이 꺼져 있으면 애초에 부르지 않아야 하고, 이 코드를 받으면 그 통화의 분석을 그만둡니다.
+     * 409 인 이유 — 요청은 올바르지만 지금 계정 상태와 맞지 않습니다.
+     */
+    ANALYSIS_001(HttpStatus.CONFLICT, "통화 종료 후 자동 분석이 꺼져 있어요"),
+
     DEVICE_001(HttpStatus.UNPROCESSABLE_ENTITY, "통화 자동녹음을 지원하지 않는 기기예요"),
     /**
      * [확장] X-Device-Id 누락·형식 오류·타인 단말.

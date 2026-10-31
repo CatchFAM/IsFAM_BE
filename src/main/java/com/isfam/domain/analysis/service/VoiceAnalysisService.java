@@ -54,6 +54,7 @@ public class VoiceAnalysisService {
     private final DangerShareRepository dangerShareRepository;
     private final UserSettingsRepository userSettingsRepository;
     private final NotificationService notificationService;
+    private final AutoAnalysisGuard autoAnalysisGuard;
     private final ModelVersionPolicy modelVersionPolicy;
     private final Clock clock;
 
@@ -62,9 +63,10 @@ public class VoiceAnalysisService {
     /**
      * {@code POST /voice-analyses}.
      *
-     * <p><b>검사 순서</b> — 모델 버전(MODEL_001) → 소유권(404) → 짝 검증 → 중복.
-     * 버전을 먼저 보는 이유는 {@code VoiceprintService} 와 같습니다. 재시도로 해결되지 않는
-     * 유일한 조건이라, 앱이 곧장 "업데이트해 주세요"로 분기해야 합니다.
+     * <p><b>검사 순서</b> — 자동 분석 설정(ANALYSIS_001) → 모델 버전(MODEL_001) → 소유권(404)
+     * → 짝 검증 → 중복. 앞의 둘은 재시도로 해결되지 않는 조건이라 먼저 봅니다.
+     * 그중 설정이 맨 앞인 이유는, 사용자가 분석을 껐다면 버전이 맞든 틀리든 처리하지 않아야
+     * 하기 때문입니다(알림 설정 세분화 5단계). 분석 도중에 설정을 끈 경우에도 결과를 받지 않습니다.
      *
      * <p><b>저장 · 상태 전이 · 알림이 한 트랜잭션입니다.</b> 명세 [정책] 그대로이고,
      * 갈라두면 "분석 결과는 있는데 call_events 는 detected" 같은 조합이 생깁니다.
@@ -76,6 +78,7 @@ public class VoiceAnalysisService {
      */
     @Transactional
     public VoiceAnalysisDto.Item submit(Long userId, VoiceAnalysisDto.SubmitRequest request) {
+        autoAnalysisGuard.requireEnabled(userId);
         modelVersionPolicy.requireSupported(request.onDeviceModelVersion());
 
         CallEvent callEvent = callEventRepository

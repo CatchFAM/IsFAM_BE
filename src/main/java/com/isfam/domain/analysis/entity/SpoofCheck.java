@@ -41,7 +41,7 @@ import java.time.Instant;
  *
  * <p><b>판정하지 못한 요청도 row 를 남깁니다.</b>
  * <ul>
- *   <li>{@link AnalysisStatus#REJECTED} — 우리가 거부 (상한 초과·헤더 불량)</li>
+ *   <li>{@link AnalysisStatus#REJECTED} — 우리가 거부 (상한 초과·헤더 불량·자동 분석 꺼짐)</li>
  *   <li>{@link AnalysisStatus#FAILED} — 분석 서버 호출이 실패 (260926, P-20 재개)</li>
  * </ul>
  * 둘 다 판정값 4종이 null 입니다. 음성이 들어왔다는 사실은 판정 여부와 상관없이
@@ -67,6 +67,8 @@ import java.time.Instant;
  *
  * <p><b>DB CHECK 제약은 {@code db/phase13-0.sql} 이 기준입니다.</b> 이 enum 에 값을 더하면
  * 그 SQL 의 {@code ck_spoof_checks_status} 도 같이 고쳐야 INSERT 가 통과합니다.
+ * {@link RejectedReason} 의 값 목록 제약은 {@code db/notification-settings-5.sql} 이 최신입니다
+ * (public · retired 두 테이블 모두).
  */
 @Entity
 @Getter
@@ -130,14 +132,25 @@ public class SpoofCheck {
         }
     }
 
-    /** 판정을 거부한 이유. {@code analysisStatus == REJECTED} 일 때만 채웁니다 */
+    /**
+     * 판정을 거부한 이유. {@code analysisStatus == REJECTED} 일 때만 채웁니다.
+     *
+     * <p><b>값을 추가하면 DB 제약도 SQL 로 바꿔야 합니다</b> — {@code public.spoof_checks} 와
+     * {@code retired.spoof_checks} 둘 다. retired 쪽을 빠뜨리면 그 사용자가 탈퇴할 때
+     * 접속기록 이관 INSERT 가 실패해 탈퇴가 통째로 롤백됩니다.
+     */
     public enum RejectedReason {
         /** 상한(6초) 초과. WAV 헤더 계산값 또는 FastAPI 응답값 */
         DURATION_EXCEEDED,
         /** RIFF/WAVE 헤더를 읽을 수 없음. 앱이 wav 가 아닌 것을 보냈거나 파일이 깨짐 */
         INVALID_WAV_HEADER,
         /** 업로드 상한(6초 · 16kHz mono 16bit 기준 약 192KB) 초과 */
-        SIZE_EXCEEDED;
+        SIZE_EXCEEDED,
+        /**
+         * 사용자가 "통화 종료 후 자동 분석"을 꺼 둔 상태 (알림 설정 세분화 5단계).
+         * 앱은 꺼져 있으면 부르지 않아야 하지만, 들어온 음성은 파기하고 이 사유로 기록합니다.
+         */
+        AUTO_ANALYSIS_DISABLED;
 
         @JsonValue
         public String toJson() {
@@ -164,7 +177,7 @@ public class SpoofCheck {
          * 판별 목적으로 분석 서버에 보냈다는 처리 사실은 같습니다.
          */
         DETECT,
-        /** 통화 음성을 받았으나 상한 초과·헤더 불량으로 판별하지 않음 */
+        /** 통화 음성을 받았으나 상한 초과·헤더 불량·자동 분석 꺼짐으로 판별하지 않음 */
         REJECT;
 
         @JsonValue

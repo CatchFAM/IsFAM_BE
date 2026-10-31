@@ -35,6 +35,7 @@ import static org.mockito.Mockito.verify;
 
 /**
  * 260926 — 수집 상한 6초와 분석 서버 실패 기록(P-20 재개).
+ * 알림 설정 세분화 5단계 — 자동 분석이 꺼져 있으면 판정 거부.
  *
  * <p>공통 불변식: <b>음성이 tmpfs 에 들어온 요청은 결과가 무엇이든 row 1건 + purged_at</b>.
  */
@@ -55,6 +56,7 @@ class SpoofCheckServiceTest {
     @Mock DeviceRepository deviceRepository;
     @Mock AntiSpoofingClient antiSpoofingClient;
     @Mock AudioTempStorage audioTempStorage;
+    @Mock AutoAnalysisGuard autoAnalysisGuard;
 
     private SpoofCheckService service;
 
@@ -64,7 +66,7 @@ class SpoofCheckServiceTest {
     @BeforeEach
     void setUp() {
         service = new SpoofCheckService(spoofCheckRepository, callEventRepository,
-                deviceRepository, antiSpoofingClient, audioTempStorage,
+                deviceRepository, antiSpoofingClient, audioTempStorage, autoAnalysisGuard,
                 Clock.fixed(NOW, ZoneOffset.UTC));
 
         CallEvent callEvent = mock(CallEvent.class);
@@ -74,6 +76,8 @@ class SpoofCheckServiceTest {
         given(callEventRepository.findByIdAndUserId(CALL_EVENT_ID, USER_ID))
                 .willReturn(Optional.of(callEvent));
         given(audioTempStorage.purge(any())).willReturn(PURGED_AT);
+        // lenient — 자동 분석 꺼짐 테스트가 이 스텁을 덮어씁니다
+        lenient().when(autoAnalysisGuard.isEnabled(USER_ID)).thenReturn(true);
         // lenient — 저장 실패 테스트가 이 스텁을 덮어씁니다
         lenient().when(spoofCheckRepository.save(any(SpoofCheck.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -158,6 +162,37 @@ class SpoofCheckServiceTest {
         verify(antiSpoofingClient, never()).detect(any());
         assertThat(captureSaved().getRejectedReason())
                 .isEqualTo(SpoofCheck.RejectedReason.SIZE_EXCEEDED);
+    }
+
+    // ── 자동 분석 꺼짐 (알림 설정 세분화 5단계) ──────────────
+
+    /**
+     * 꺼져 있어도 음성이 들어왔다면 파기 + 거부 기록 — 다른 거부 사유와 같은 불변식.
+     * 헤더도 읽지 않고 분석 서버로도 보내지 않습니다.
+     */
+    @Test
+    void autoAnalysisDisabledIsRejectedAndRecorded() {
+        given(autoAnalysisGuard.isEnabled(USER_ID)).willReturn(false);
+        given(audioTempStorage.receive(any(), any()))
+                .willReturn(new AudioTempStorage.TempAudio(Path.of("x.wav"), FIVE_SECONDS_BYTES));
+
+        assertThatThrownBy(this::call)
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.ANALYSIS_001);
+
+        verify(audioTempStorage, never()).probe(any());
+        verify(antiSpoofingClient, never()).detect(any());
+        verify(audioTempStorage).purge(any());
+
+        SpoofCheck saved = captureSaved();
+        assertThat(saved.getAnalysisStatus()).isEqualTo(SpoofCheck.AnalysisStatus.REJECTED);
+        assertThat(saved.getOperation()).isEqualTo(SpoofCheck.Operation.REJECT);
+        assertThat(saved.getRejectedReason())
+                .isEqualTo(SpoofCheck.RejectedReason.AUTO_ANALYSIS_DISABLED);
+        assertThat(saved.getPurgedAt()).isEqualTo(PURGED_AT);
+        assertThat(saved.getAudioBytes()).isEqualTo((int) FIVE_SECONDS_BYTES);
+        assertThat(saved.getSpoofScore()).isNull();
+        assertThat(saved.getRemotePurged()).isNull();
     }
 
     // ── 내부 ──────────────────────────────────────────────

@@ -23,9 +23,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class CallEventService {
 
     private final CallEventRepository callEventRepository;
+    private final AutoAnalysisGuard autoAnalysisGuard;
 
     /**
      * {@code POST /call-events} — 앱이 녹음 파일 생성을 감지한 직후.
+     *
+     * <p><b>자동 분석이 꺼져 있으면 ANALYSIS_001(409)</b> (알림 설정 세분화 5단계).
+     * 분석을 끈 사용자의 통화는 "있었다"는 기록도 남기지 않습니다 — 분석 흐름의 첫 단계라
+     * 여기서 막으면 뒤의 판정·결과 제출까지 이어지지 않습니다.
      *
      * <p><b>멱등 처리를 하지 않습니다.</b> 같은 통화가 두 번 감지되면 이벤트도 두 개
      * 생기는데, 그걸 막을 방법이 마땅치 않습니다 — 중복 판정 키로 쓸 만한 게
@@ -36,6 +41,8 @@ public class CallEventService {
      */
     @Transactional
     public CallEventDto.CreateResponse create(Long userId, CallEventDto.CreateRequest request) {
+        autoAnalysisGuard.requireEnabled(userId);
+
         CallEvent saved = callEventRepository.save(
                 CallEvent.detect(userId, request.detectedAt()));
 
@@ -49,6 +56,9 @@ public class CallEventService {
      * <p>{@code analyzed_on_device} 는 {@code POST /voice-analyses} 트랜잭션 안에서만
      * 찍힙니다. 앱이 양쪽을 다 호출하면 중간에 끊겼을 때 상태가 어긋나므로
      * 전이 지점을 한쪽으로 통일했습니다(명세 [정책]).
+     *
+     * <p><b>자동 분석이 꺼져 있어도 막지 않습니다.</b> 분석을 그만두는 쪽의 요청이라,
+     * 막으면 설정을 끄기 직전에 만든 이벤트가 detected 로 남습니다.
      *
      * <p>이미 분석이 끝난 이벤트에 대한 요청은 <b>거절하지 않고 무시</b>합니다 —
      * 이유는 {@link CallEvent#updateLocalStatus} javadoc 에 있습니다.

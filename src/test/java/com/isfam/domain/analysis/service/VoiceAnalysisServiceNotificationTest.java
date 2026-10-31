@@ -1,5 +1,7 @@
 package com.isfam.domain.analysis.service;
 
+import com.isfam.common.error.BusinessException;
+import com.isfam.common.error.ErrorCode;
 import com.isfam.common.model.ModelVersionPolicy;
 import com.isfam.domain.analysis.dto.VoiceAnalysisDto;
 import com.isfam.domain.analysis.entity.CallEvent;
@@ -27,8 +29,10 @@ import java.time.ZoneOffset;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -40,6 +44,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
  *   <li>위험 → {@code danger_call}, 확인 필요 → {@code needs_check_call} — 설정과 무관하게 항상 생성</li>
  *   <li>안전 → {@code normal_call} — 안전 결과 알림이 켜져 있을 때만. 꺼져 있으면 알림함에도 없음</li>
  *   <li>통화 분석 알림 문구에 가족 이름이 들어가지 않음</li>
+ *   <li>5단계 — 자동 분석이 꺼져 있으면 ANALYSIS_001, 아무것도 저장하지 않음</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -57,6 +62,7 @@ class VoiceAnalysisServiceNotificationTest {
     @Mock DangerShareRepository dangerShareRepository;
     @Mock UserSettingsRepository userSettingsRepository;
     @Mock NotificationService notificationService;
+    @Mock AutoAnalysisGuard autoAnalysisGuard;
     @Mock ModelVersionPolicy modelVersionPolicy;
 
     private VoiceAnalysisService service;
@@ -65,7 +71,7 @@ class VoiceAnalysisServiceNotificationTest {
     void setUp() {
         service = new VoiceAnalysisService(voiceAnalysisRepository, callEventRepository,
                 spoofCheckRepository, notificationRepository, dangerShareRepository,
-                userSettingsRepository, notificationService, modelVersionPolicy,
+                userSettingsRepository, notificationService, autoAnalysisGuard, modelVersionPolicy,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -134,6 +140,24 @@ class VoiceAnalysisServiceNotificationTest {
         service.submit(USER_ID, request("normal"));
 
         verify(notificationService, never()).create(any());
+    }
+
+    // ── 자동 분석 꺼짐 (5단계) ─────────────────────────────
+
+    @Test
+    @DisplayName("자동 분석 OFF → ANALYSIS_001, 분석·알림 모두 저장하지 않는다")
+    void autoAnalysisDisabledRejectsBeforeAnything() {
+        doThrow(new BusinessException(ErrorCode.ANALYSIS_001))
+                .when(autoAnalysisGuard).requireEnabled(USER_ID);
+
+        VoiceAnalysisDto.SubmitRequest request = mock(VoiceAnalysisDto.SubmitRequest.class);
+
+        assertThatThrownBy(() -> service.submit(USER_ID, request))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.ANALYSIS_001);
+
+        verifyNoInteractions(modelVersionPolicy, callEventRepository, voiceAnalysisRepository,
+                notificationService);
     }
 
     // ── 내부 ──────────────────────────────────────────────

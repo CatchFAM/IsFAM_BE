@@ -58,6 +58,10 @@ import java.util.Locale;
  * 어느 팩토리를 쓰느냐로 정해지므로 여기서 따로 넘기지 않습니다.
  *
  * <p><b>260926 — 수집 상한 35초 → 6초, 분석 서버 실패도 기록(P-20 재개).</b>
+ *
+ * <p><b>알림 설정 세분화 5단계 — 자동 분석이 꺼져 있으면 판정하지 않습니다.</b>
+ * 음성은 이미 올라온 뒤라 다른 거부와 똑같이 파기하고 {@code AUTO_ANALYSIS_DISABLED} 로
+ * 기록한 뒤 ANALYSIS_001(409)을 냅니다. 분석 서버로는 보내지 않습니다.
  */
 @Slf4j
 @Service
@@ -105,6 +109,7 @@ public class SpoofCheckService {
     private final DeviceRepository deviceRepository;
     private final AntiSpoofingClient antiSpoofingClient;
     private final AudioTempStorage audioTempStorage;
+    private final AutoAnalysisGuard autoAnalysisGuard;
     private final Clock clock;
 
     /**
@@ -117,6 +122,10 @@ public class SpoofCheckService {
      * <p><b>거부할 때도, 실패할 때도 파기와 기록이 먼저입니다.</b> 순서가 뒤집히면
      * "음성이 들어왔다"는 사실이 기록에 남지 않아 통제를 만든 의미가 없어집니다.
      *
+     * <p><b>자동 분석 설정은 소유권·형식 검사 뒤, 수신 전에 읽습니다.</b> 남의 단말·남의 이벤트·
+     * wav 가 아닌 요청은 원래대로 기록 없이 거절되고, 그걸 통과해 음성이 들어온 요청만
+     * {@code AUTO_ANALYSIS_DISABLED} 거부 기록을 남깁니다 — 다른 거부 사유와 같은 자리입니다.
+     *
      * @param clientIp 접속기록 항목. 컨트롤러가 프록시 헤더까지 고려해 뽑아 넘깁니다
      */
     public SpoofCheckDto.Response check(Long userId, Long deviceId, Long callEventId,
@@ -125,6 +134,8 @@ public class SpoofCheckService {
         requireMyDevice(userId, deviceId);
         CallEvent callEvent = requireMyCallEvent(userId, callEventId);
         requireWav(audioFile);
+
+        boolean analysisDisabled = !autoAnalysisGuard.isEnabled(userId);
 
         Instant requestedAt = clock.instant();
 
@@ -142,7 +153,10 @@ public class SpoofCheckService {
         try {
             audio = audioTempStorage.receive(audioFile, ALLOWED_EXTENSION);
 
-            if (audio.sizeBytes() > MAX_AUDIO_BYTES) {
+            if (analysisDisabled) {
+                // 헤더도 읽지 않습니다 — 분석하지 않기로 한 음성을 들여다볼 이유가 없습니다
+                rejection = SpoofCheck.RejectedReason.AUTO_ANALYSIS_DISABLED;
+            } else if (audio.sizeBytes() > MAX_AUDIO_BYTES) {
                 rejection = SpoofCheck.RejectedReason.SIZE_EXCEEDED;
             } else {
                 AudioTempStorage.Probe probe = audioTempStorage.probe(audio);
@@ -193,7 +207,7 @@ public class SpoofCheckService {
 
         /*
          * 분석 서버까지 간 요청만 원격 파기 값을 가집니다(P-23).
-         * 사전 거부(헤더 불량·상한 초과)는 보낸 적이 없으므로 null 이고,
+         * 사전 거부(헤더 불량·상한 초과·자동 분석 꺼짐)는 보낸 적이 없으므로 null 이고,
          * 그건 파기 실패가 아니라 "해당 없음"입니다.
          */
         Boolean remotePurged = result == null ? null : result.purged();
@@ -208,6 +222,9 @@ public class SpoofCheckService {
             log.info("딥보이스 판정 거부 — spoofCheckId={}, reason={}, duration={}, bytes={}",
                     saved.getId(), rejection, duration, audioBytes);
 
+            if (rejection == SpoofCheck.RejectedReason.AUTO_ANALYSIS_DISABLED) {
+                throw new BusinessException(ErrorCode.ANALYSIS_001);
+            }
             throw new BusinessException(ErrorCode.VOICE_002, rejection.toJson());
         }
 
