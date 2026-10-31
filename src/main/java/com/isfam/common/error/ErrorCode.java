@@ -36,6 +36,8 @@ public enum ErrorCode {
     FAMILY_005(HttpStatus.CONFLICT, "관리자는 공간을 삭제한 뒤에 나갈 수 있어요"),
     FAMILY_006(HttpStatus.CONFLICT, "가족 공간 인원이 가득 찼어요"),
     FAMILY_007(HttpStatus.CONFLICT, "남아 있는 구성원이 있어 공간을 삭제할 수 없어요"),
+    /** GET /family/passphrase — 아직 정하지 않음. 앱은 owner 면 설정 화면, member 면 "아직 없어요" */
+    FAMILY_008(HttpStatus.NOT_FOUND, "아직 우리 집 암호가 없어요"),
 
     INVITE_001(HttpStatus.NOT_FOUND, "만료되었거나 존재하지 않는 초대예요"), // 만료·비활성이면 410
     INVITE_002(HttpStatus.CONFLICT, "이미 이 가족 공간의 구성원이에요"),

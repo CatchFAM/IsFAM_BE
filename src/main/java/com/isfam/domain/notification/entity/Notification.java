@@ -65,7 +65,7 @@ public class Notification {
      * <p>{@code protection_warning} 은 ERD 에 정의돼 있지만 <b>아직 발송 지점이 없습니다.</b>
      *
      * <p><b>값을 추가하면 DB CHECK 제약도 SQL 로 바꿔야 합니다.</b> Hibernate 는 기존 제약을
-     * 갱신하지 않습니다 — 현재 정의: {@code db/notification-settings-2.sql}.
+     * 갱신하지 않습니다 — 현재 정의: {@code db/family-passphrase-1.sql}.
      */
     public enum Type {
         /** 통화 분석 — 위험 (AI 합성·사칭 의심) */
@@ -80,7 +80,9 @@ public class Notification {
         /** 통화 분석 — 확인 필요 */
         NEEDS_CHECK_CALL,
         /** 통화 분석 — 안전. 설정이 꺼져 있으면 알림함에도 만들지 않음 */
-        NORMAL_CALL;
+        NORMAL_CALL,
+        /** 우리 집 암호 등록·수정. owner 를 뺀 멤버에게 */
+        PASSPHRASE_UPDATED;
 
         /** 응답은 "danger_call" 소문자입니다 */
         @JsonValue
@@ -95,9 +97,12 @@ public class Notification {
      * <p>{@code DANGER_SHARE} 의 {@code target_id} 는 share_id 입니다. 앱은 푸시를 받을 때
      * 폰에 저장해 둔 공유 정보를 이 값으로 찾아 화면을 그립니다 — 서버를 다시 부르지 않으므로
      * 7일 뒤 행이 지워져도 알림함은 그대로 동작합니다.
+     *
+     * <p>{@code FAMILY_PASSPHRASE} 는 우리 집 암호 화면입니다. 푸시 data 에는 {@code type} 이 없고
+     * 이 값으로 화면을 정하므로 {@code FAMILY} 와 나눴습니다.
      */
     public enum TargetType {
-        VOICE_ANALYSIS, FAMILY, SETTINGS, NONE, DANGER_SHARE;
+        VOICE_ANALYSIS, FAMILY, SETTINGS, NONE, DANGER_SHARE, FAMILY_PASSPHRASE;
 
         @JsonValue
         public String toJson() {
@@ -173,6 +178,22 @@ public class Notification {
                 "구성원이 나갔어요",
                 displayName + "님이 가족 공간을 나갔어요",
                 TargetType.FAMILY, null);
+    }
+
+    /**
+     * {@code PUT /family/passphrase} 로 실제로 값이 바뀌었을 때, owner 를 뺀 active 멤버에게.
+     *
+     * <p><b>질문·정답을 문구에 넣지 마세요.</b> 푸시는 FCM(미국)을 거치고 잠금화면에도 뜹니다.
+     * 정답이 알림에 실리면 암호를 정해두는 의미가 없어집니다. 앱은 탭하면 GET 으로 가져갑니다.
+     * 그래서 문구를 파라미터로 열지 않았습니다.
+     *
+     * @param firstTime 처음 정한 것이면 true, 바꾼 것이면 false
+     */
+    public static Notification passphraseUpdated(Long userId, boolean firstTime) {
+        return new Notification(userId, Type.PASSPHRASE_UPDATED,
+                firstTime ? "우리 집 암호가 정해졌어요" : "우리 집 암호가 바뀌었어요",
+                "가족 공간에서 확인해 보세요",
+                TargetType.FAMILY_PASSPHRASE, null);
     }
 
     /**

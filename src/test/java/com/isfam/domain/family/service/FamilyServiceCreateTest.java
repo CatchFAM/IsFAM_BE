@@ -7,6 +7,7 @@ import com.isfam.domain.family.entity.Family;
 import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMemberAliasRepository;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
+import com.isfam.domain.family.repository.FamilyPassphraseRepository;
 import com.isfam.domain.family.repository.FamilyRepository;
 import com.isfam.domain.notification.service.NotificationService;
 import com.isfam.domain.voice.repository.VoiceprintRepository;
@@ -47,6 +48,7 @@ class FamilyServiceCreateTest {
     @Mock FamilyRepository familyRepository;
     @Mock FamilyMembershipRepository membershipRepository;
     @Mock FamilyMemberAliasRepository aliasRepository;
+    @Mock FamilyPassphraseRepository passphraseRepository;
     @Mock UserRepository userRepository;
     @Mock UserAgreementRepository userAgreementRepository;
     @Mock VoiceprintRepository voiceprintRepository;
@@ -58,7 +60,7 @@ class FamilyServiceCreateTest {
     @BeforeEach
     void setUp() {
         service = new FamilyService(familyRepository, membershipRepository, aliasRepository,
-                userRepository, userAgreementRepository, voiceprintRepository,
+                passphraseRepository, userRepository, userAgreementRepository, voiceprintRepository,
                 notificationService, eventPublisher, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 

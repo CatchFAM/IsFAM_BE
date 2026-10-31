@@ -12,6 +12,7 @@ import com.isfam.domain.family.entity.FamilyMemberAlias;
 import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMemberAliasRepository;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
+import com.isfam.domain.family.repository.FamilyPassphraseRepository;
 import com.isfam.domain.family.repository.FamilyRepository;
 import com.isfam.domain.notification.entity.Notification;
 import com.isfam.domain.notification.service.NotificationService;
@@ -57,6 +58,7 @@ public class FamilyService {
     private final FamilyRepository familyRepository;
     private final FamilyMembershipRepository membershipRepository;
     private final FamilyMemberAliasRepository aliasRepository;
+    private final FamilyPassphraseRepository passphraseRepository;
     private final UserRepository userRepository;
     private final UserAgreementRepository userAgreementRepository;
     private final VoiceprintRepository voiceprintRepository;
@@ -149,6 +151,8 @@ public class FamilyService {
      * <p>owner 본인 폰은 다음 GET /family/embeddings 에서 404(FAMILY_002)를 받고
      * 로컬 임베딩을 정리합니다. voiceprints 는 user 소유라 삭제되지 않습니다 —
      * 새 공간을 만들고 초대만 다시 하면 음성 재등록 없이 복구됩니다.
+     *
+     * <p>공간의 별명·우리 집 암호도 함께 물리 삭제합니다.
      */
     @Transactional
     public void delete(Long userId) {
@@ -170,6 +174,9 @@ public class FamilyService {
         // 공간이 사라지면 그 안의 별명도 근거를 잃습니다.
         // flushAutomatically 로 위 두 변경이 먼저 반영된 뒤 삭제됩니다.
         aliasRepository.deleteAllByFamilyId(family.getId());
+
+        // 우리 집 암호도 공간과 함께 근거를 잃습니다
+        passphraseRepository.deleteAllByFamilyId(family.getId());
     }
 
     // ── 나가기 / 내보내기 ───────────────────────────────────
