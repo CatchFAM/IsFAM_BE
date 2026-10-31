@@ -31,7 +31,8 @@ import java.time.Instant;
  * 존재하지 않습니다. 있으면 아무나 남에게 가짜 위험 알림을 꽂을 수 있습니다
  * (service-flow.md 9장).
  *
- * <p><b>{@code danger_call}·{@code danger_share} 본문에 가족 이름·닉네임·번호를 절대 넣지 마세요.</b>
+ * <p><b>통화 분석 알림 3종({@code danger_call}·{@code needs_check_call}·{@code normal_call})과
+ * {@code danger_share} 본문에 가족 이름·닉네임·번호를 절대 넣지 마세요.</b>
  * 서버가 발신자 매칭 결과를 안다는 뜻이 되어 legal-compliance.md 5장과 정면으로 모순됩니다.
  * 구체적 안내("엄마 목소리로 확인됨", "아빠 번호로 온 전화")는 폰이 만듭니다.
  * 반대로 {@code member_joined}·{@code member_left} 는 서버가 정당하게 아는 사실이라
@@ -50,17 +51,36 @@ import java.time.Instant;
 public class Notification {
 
     /**
-     * {@code protection_warning} 은 ERD 에 정의돼 있지만 <b>아직 발송 지점이 없습니다.</b>
-     * 명세 어디에도 이 알림을 만드는 API 가 없어서, 값만 열어두고 사용하지 않습니다.
-     * (권한 회수 감지 같은 용도로 나중에 붙일 자리입니다)
+     * 알림 종류.
+     *
+     * <p><b>통화 분석 결과는 판정별로 나뉩니다</b> (알림 설정 세분화 2단계). 설정 화면에서
+     * 위험·확인필요·안전을 따로 켜고 끄기 때문입니다. 전에는 위험·확인필요가 모두
+     * {@code DANGER_CALL} 하나였고, 이미 쌓인 확인필요 알림은 {@code DANGER_CALL} 로 남아 있습니다
+     * (90일 뒤 파기 배치가 정리).
+     *
+     * <p>{@code VOICEPRINT_REGISTERED} 는 <b>더 이상 만들지 않습니다.</b> 가족 폰의 임베딩 갱신은
+     * 이 알림이 아니라 data-only 동기화 푸시({@code family_sync})가 맡고 있어서, 알림은 소음일 뿐이었습니다.
+     * 이미 쌓인 행이 응답에 나갈 수 있어 값은 남겨둡니다.
+     *
+     * <p>{@code protection_warning} 은 ERD 에 정의돼 있지만 <b>아직 발송 지점이 없습니다.</b>
      *
      * <p><b>값을 추가하면 DB CHECK 제약도 SQL 로 바꿔야 합니다.</b> Hibernate 는 기존 제약을
-     * 갱신하지 않습니다 — {@code db/danger-share-1.sql} 참고.
+     * 갱신하지 않습니다 — 현재 정의: {@code db/notification-settings-2.sql}.
      */
     public enum Type {
-        DANGER_CALL, MEMBER_JOINED, MEMBER_LEFT, VOICEPRINT_REGISTERED, PROTECTION_WARNING,
+        /** 통화 분석 — 위험 (AI 합성·사칭 의심) */
+        DANGER_CALL,
+        MEMBER_JOINED,
+        MEMBER_LEFT,
+        /** 더 이상 생성하지 않음 — 기존 행 호환용 */
+        VOICEPRINT_REGISTERED,
+        PROTECTION_WARNING,
         /** 가족이 위험 통화를 공유함. 받는 사람에게 생성 */
-        DANGER_SHARE;
+        DANGER_SHARE,
+        /** 통화 분석 — 확인 필요 */
+        NEEDS_CHECK_CALL,
+        /** 통화 분석 — 안전. 설정이 꺼져 있으면 알림함에도 만들지 않음 */
+        NORMAL_CALL;
 
         /** 응답은 "danger_call" 소문자입니다 */
         @JsonValue
@@ -137,8 +157,8 @@ public class Notification {
     /**
      * {@code POST /invitations/&#123;code&#125;/accept} 성공 시, <b>본인을 제외한</b> 기존 멤버에게.
      *
-     * <p>service-flow.md 9장 기준 "선택" 항목이지만 넣습니다. 빼면 초대 수락이
-     * 알림함에 아무 흔적도 남기지 않아, 사용자 입장에서는 누가 들어왔는지 알 방법이 없습니다.
+     * <p>음성 공유 동의 구조의 "신규 구성원 통지" 장치입니다(P-02). 가족 소식 알림을 꺼도
+     * <b>알림함에는 반드시 남깁니다</b> — 끄는 건 푸시뿐입니다(3단계).
      */
     public static Notification memberJoined(Long userId, String displayName) {
         return new Notification(userId, Type.MEMBER_JOINED,
@@ -155,17 +175,8 @@ public class Notification {
                 TargetType.FAMILY, null);
     }
 
-    /** {@code POST /me/voiceprint} 등록 성공 시 (Phase 6) */
-    public static Notification voiceprintRegistered(Long userId, String displayName) {
-        return new Notification(userId, Type.VOICEPRINT_REGISTERED,
-                "목소리가 등록됐어요",
-                displayName + "님이 목소리를 등록했어요",
-                TargetType.FAMILY, null);
-    }
-
     /**
-     * {@code POST /voice-analyses} 에서 {@code final_decision != normal} 일 때 (Phase 8).
-     * 명세상 <b>필수</b> 항목입니다.
+     * {@code POST /voice-analyses} 에서 {@code final_decision = danger} 일 때.
      *
      * <p>본문이 "통화 분석 결과를 확인해 보세요" 로 고정돼 있고 파라미터로 열려 있지 않은 건
      * 실수 방지입니다. 여기에 이름을 끼워 넣으려면 이 메서드를 고쳐야 하고,
@@ -175,6 +186,28 @@ public class Notification {
         return new Notification(userId, Type.DANGER_CALL,
                 "위험한 통화가 감지됐어요",
                 "통화 분석 결과를 확인해 보세요",
+                TargetType.VOICE_ANALYSIS, analysisId);
+    }
+
+    /** {@code POST /voice-analyses} 에서 {@code final_decision = needs_check} 일 때. 문구 고정 */
+    public static Notification needsCheckCall(Long userId, Long analysisId) {
+        return new Notification(userId, Type.NEEDS_CHECK_CALL,
+                "확인이 필요한 통화가 있어요",
+                "통화 분석 결과를 확인해 보세요",
+                TargetType.VOICE_ANALYSIS, analysisId);
+    }
+
+    /**
+     * {@code POST /voice-analyses} 에서 {@code final_decision = normal} 이고 안전 결과 알림이 켜져 있을 때.
+     *
+     * <p><b>"가족 목소리가 맞아요" 같은 문구를 쓰지 마세요.</b> 서버는 정상 판정만 알 뿐
+     * 누구 목소리인지 모르고, 알아서도 안 됩니다(L7-c-5). 정상 판정에는 모르는 사람의
+     * 평범한 통화도 포함됩니다. "가족 목소리" 안내는 폰이 로컬 매칭 결과로 만듭니다.
+     */
+    public static Notification normalCall(Long userId, Long analysisId) {
+        return new Notification(userId, Type.NORMAL_CALL,
+                "통화 분석이 끝났어요",
+                "이상 징후가 발견되지 않았어요",
                 TargetType.VOICE_ANALYSIS, analysisId);
     }
 
