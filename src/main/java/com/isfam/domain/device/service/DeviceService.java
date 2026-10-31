@@ -4,7 +4,6 @@ import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
 import com.isfam.common.model.ModelVersionPolicy;
 import com.isfam.domain.device.dto.DeviceDto;
-import com.isfam.domain.device.dto.SettingsDto;
 import com.isfam.domain.device.entity.Device;
 import com.isfam.domain.device.repository.DeviceRepository;
 import lombok.RequiredArgsConstructor;
@@ -20,9 +19,10 @@ import java.time.Instant;
 import java.util.Set;
 
 /**
- * 단말 등록 · 통화녹음 지원 여부 · 설정 · 동기화 상태 · 모델 정보.
+ * 단말 등록 · 통화녹음 지원 여부 · 동기화 상태 · 모델 정보.
  *
- * <p>/settings 항목이 devices 컬럼이라 설정도 여기서 함께 다룹니다.
+ * <p>{@code /settings/**} 는 {@link SettingsService} 로 옮겼습니다 — 알림·자동분석이
+ * 계정 단위({@code user_settings})가 되면서 더 이상 단말 컬럼만의 문제가 아니게 됐습니다.
  */
 @Slf4j
 @Service
@@ -173,33 +173,6 @@ public class DeviceService {
 
         return new DeviceDto.SyncStatusResponse(
                 device.getId(), device.getEmbeddingSyncedAt(), device.getLastSyncTrigger());
-    }
-
-    // ── 설정 ────────────────────────────────────────────────
-
-    @Transactional(readOnly = true)
-    public SettingsDto.SettingsResponse getSettings(Long userId, Long deviceId) {
-        return SettingsDto.SettingsResponse.from(findMyDevice(userId, deviceId));
-    }
-
-    @Transactional
-    public SettingsDto.SettingsResponse updateNotificationEnabled(
-            Long userId, Long deviceId, boolean notificationEnabled) {
-
-        Device device = findMyDevice(userId, deviceId);
-        device.updateNotificationEnabled(notificationEnabled);
-        return SettingsDto.SettingsResponse.from(device);
-    }
-
-    /** 앱 실행 시마다 호출됩니다. 권한이 회수됐으면 앱이 홈 화면에 경고 배너를 띄웁니다 */
-    @Transactional
-    public SettingsDto.SettingsResponse syncPermissions(
-            Long userId, Long deviceId, SettingsDto.PermissionsRequest request) {
-
-        Device device = findMyDevice(userId, deviceId);
-        device.updatePermissions(request.notificationPermission(), request.microphonePermission(),
-                request.filePermission(), request.batteryOptimizationIgnored());
-        return SettingsDto.SettingsResponse.from(device);
     }
 
     // ── 모델 정보 (비인증) ──────────────────────────────────

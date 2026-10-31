@@ -12,6 +12,7 @@ import com.isfam.domain.auth.entity.User;
 import com.isfam.domain.auth.repository.RefreshTokenRepository;
 import com.isfam.domain.auth.repository.UserRepository;
 import com.isfam.domain.device.repository.DeviceRepository;
+import com.isfam.domain.device.repository.UserSettingsRepository;
 import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMemberAliasRepository;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
@@ -93,6 +94,7 @@ public class WithdrawalService {
     private final NotificationRepository notificationRepository;
     private final DangerShareRepository dangerShareRepository;
     private final DeviceRepository deviceRepository;
+    private final UserSettingsRepository userSettingsRepository;
     private final RetiredAccessLogRepository retiredAccessLogRepository;
     private final VoiceprintAccessLogger voiceprintAccessLogger;
     private final DataDeletionLogger dataDeletionLogger;
@@ -212,10 +214,15 @@ public class WithdrawalService {
         RetiredAccessLogRepository.Moved moved =
                 retiredAccessLogRepository.moveWithdrawnUser(userId, startedAt);
 
-        // ── ⑥ 단말 삭제 ────────────────────────────────────
+        // ── ⑥ 단말 · 계정 설정 삭제 ────────────────────────
         // 여기서 push_token 이 사라지므로 ⑨의 푸시는 "남은 가족"에게만 나갑니다.
         deleted.put(DataDeletionLogger.Tables.DEVICES,
                 deviceRepository.deleteAllByUserId(userId));
+
+        // 알림·자동분석 설정(계정 단위). 계정이 없어지면 보유 근거도 사라집니다.
+        // 단말과 같은 성격(이용자 설정)이라 여기서 함께 지웁니다.
+        deleted.put(DataDeletionLogger.Tables.USER_SETTINGS,
+                userSettingsRepository.deleteByUserId(userId));
 
         // ── ⑦ 세션 전량 종료 ───────────────────────────────
         // revoke 는 삭제가 아니라 무효화라 data_deletion_logs 대상이 아닙니다.

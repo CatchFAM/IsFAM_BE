@@ -1,7 +1,9 @@
 package com.isfam.infra.push;
 
 import com.isfam.domain.device.entity.Device;
+import com.isfam.domain.device.entity.UserSettings;
 import com.isfam.domain.device.repository.DeviceRepository;
+import com.isfam.domain.device.repository.UserSettingsRepository;
 import com.isfam.infra.push.event.DangerShareEvent;
 import com.isfam.infra.push.event.FamilySyncEvent;
 import com.isfam.infra.push.event.UserNotificationEvent;
@@ -15,6 +17,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -28,6 +31,10 @@ import java.util.stream.Collectors;
  *   <li>{@code @Async} — FCM 왕복(수백 ms)이 HTTP 응답을 붙잡지 않게 합니다.
  *       초대 수락 응답이 푸시 발송을 기다릴 이유가 없습니다</li>
  * </ul>
+ *
+ * <p><b>알림 설정은 계정 단위입니다</b> (알림 설정 세분화 3단계). 예전에는 단말마다
+ * {@code notification_enabled} 를 봤지만, 이제 {@code user_settings} 하나를 보고
+ * 그 사용자의 모든 단말에 같은 결정을 적용합니다.
  *
  * <p><b>여기서 예외가 새면 아무도 모릅니다.</b> {@code @Async} void 메서드의 예외는
  * 호출부로 전파되지 않고 조용히 사라집니다. 그래서 본문 전체를 try/catch 로 감쌌습니다 —
@@ -49,6 +56,7 @@ public class PushDispatcher {
 
     private final PushSender pushSender;
     private final DeviceRepository deviceRepository;
+    private final UserSettingsRepository userSettingsRepository;
     private final InvalidPushTokenCleaner invalidPushTokenCleaner;
 
     /**
@@ -56,14 +64,15 @@ public class PushDispatcher {
      *
      * <pre>
      * { "type": "family_sync",
-     *   "reason": "member_joined | member_removed | voiceprint_updated",
+     *   "reason": "member_joined | member_removed | voiceprint_updated | voiceprint_deleted",
      *   "family_id": "1", "occurred_at": "2026-08-19T..." }
      * </pre>
      *
      * <p>FCM data 맵의 값은 <b>전부 문자열</b>이어야 합니다. {@code family_id} 를 숫자로
      * 넣으려다 컴파일은 되고 런타임에 터지는 실수가 잦습니다.
      *
-     * <p>{@code notification_enabled} 를 보지 않습니다 — {@link PushSender#sendData} 주석 참고.
+     * <p><b>알림 설정을 보지 않습니다.</b> 이건 알림이 아니라 임베딩 동기화 신호라,
+     * 사용자가 알림을 껐다고 막으면 강퇴당한 사람 폰에 남의 생체정보가 남습니다.
      */
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -111,16 +120,29 @@ public class PushDispatcher {
      *         "target_type": "voice_analysis", "target_id": "501" }
      * </pre>
      *
-     * <p>이쪽은 {@code notification_enabled=true} 인 단말에만 갑니다. 알림을 끈 사용자에게
-     * 알림창을 띄우면 안 되니까요. 알림함({@code GET /notifications})에는 그대로 남습니다 —
+     * <p><b>알림 종류별 토글을 봅니다</b>({@link UserSettings#allowsPush}).
+     * <ul>
+     *   <li>위험 · 확인필요 · 안전 → 통화분석 알림의 각 하위 토글</li>
+     *   <li>구성원 참여 · 탈퇴 → 가족 소식 알림</li>
+     * </ul>
+     * 꺼져 있으면 푸시만 보내지 않습니다. 알림함({@code GET /notifications})에는 그대로 남습니다 —
      * 설정을 끈 건 "푸시를 받지 않겠다"지 "기록을 남기지 말라"가 아닙니다.
+     * 특히 {@code member_joined} 는 음성 공유 동의 구조의 신규 구성원 통지 장치라
+     * 알림함에서 빠지면 안 됩니다(P-02).
      */
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onUserNotification(UserNotificationEvent event) {
         try {
+            UserSettings settings = settingsOf(event.userId());
+            if (!settings.allowsPush(event.type())) {
+                log.debug("user_notification 생략 — 설정 꺼짐 (userId={}, notificationId={}, type={})",
+                        event.userId(), event.notificationId(), event.type());
+                return;
+            }
+
             List<String> tokens = deviceRepository
-                    .findByUserIdAndPushTokenIsNotNullAndNotificationEnabledTrue(event.userId())
+                    .findByUserIdAndPushTokenIsNotNull(event.userId())
                     .stream()
                     .map(Device::getPushToken)
                     .distinct()
@@ -171,13 +193,14 @@ public class PushDispatcher {
      * "아빠 번호로 딸에게 전화가 왔는데 목소리가 달랐어요" 같은 문구를 직접 만들어 로컬 알림으로 띄웁니다.
      * 별명은 보는 사람마다 달라 서버가 한 문구로 만들 수 없습니다.
      *
-     * <p><b>알림을 끈 단말에도 보냅니다.</b> 이 푸시는 알림이기 전에 "번호를 받아가라"는 신호입니다.
-     * 알림을 껐다고 안 보내면 그 폰은 번호를 받지 못하고, 7일이 지나면 서버에서 지워져
-     * 영영 볼 수 없습니다. 대신 {@code show_notification} 으로 알림창을 띄울지를 알려줍니다 —
-     * 앱은 번호는 항상 받아 저장하고, 알림창은 이 값이 "true" 일 때만 띄웁니다.
+     * <p><b>설정과 무관하게 받는 사람의 모든 단말에 보냅니다.</b> 이 푸시는 알림이기 전에
+     * "번호를 받아가라"는 신호입니다. 안 보내면 그 폰은 번호를 받지 못하고, 7일이 지나면
+     * 서버에서 지워져 영영 볼 수 없습니다. 대신 {@code show_notification} 으로 알림창을 띄울지를
+     * 알려줍니다 — 값은 받는 사람의 위험 공유 알림 설정({@code danger_share_enabled}, 앱 화면 미노출,
+     * 기본 ON)입니다. 계정 단위라 한 사람의 단말에는 모두 같은 값이 갑니다.
      *
      * <p>받는 사람마다 {@code notification_id} 가 달라서 사람별로 나눠 보냅니다. 공간 정원이
-     * 8명이라 많아야 7명 × 2회입니다.
+     * 8명이라 많아야 7회입니다.
      */
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -192,25 +215,30 @@ public class PushDispatcher {
                     .stream()
                     .collect(Collectors.groupingBy(Device::getUserId));
 
+            Map<Long, UserSettings> settingsByUser = userSettingsRepository
+                    .findAllById(event.recipients().keySet())
+                    .stream()
+                    .collect(Collectors.toMap(UserSettings::getUserId, Function.identity()));
+
             int sent = 0;
             for (Map.Entry<Long, Long> recipient : event.recipients().entrySet()) {
-                List<Device> devices = devicesByUser.getOrDefault(recipient.getKey(), List.of());
+                Long userId = recipient.getKey();
 
-                Map<Boolean, List<String>> tokensByShow = devices.stream()
-                        .collect(Collectors.partitioningBy(
-                                Device::isNotificationEnabled,
-                                Collectors.mapping(Device::getPushToken,
-                                        Collectors.collectingAndThen(Collectors.toList(),
-                                                list -> list.stream().distinct().toList()))));
-
-                for (Map.Entry<Boolean, List<String>> group : tokensByShow.entrySet()) {
-                    if (group.getValue().isEmpty()) {
-                        continue;
-                    }
-                    Map<String, String> data = dangerSharePayload(event, recipient.getValue(), group.getKey());
-                    invalidPushTokenCleaner.clear(pushSender.sendData(group.getValue(), data));
-                    sent += group.getValue().size();
+                List<String> tokens = devicesByUser.getOrDefault(userId, List.of()).stream()
+                        .map(Device::getPushToken)
+                        .distinct()
+                        .toList();
+                if (tokens.isEmpty()) {
+                    continue;
                 }
+
+                boolean showNotification = settingsByUser
+                        .getOrDefault(userId, UserSettings.defaults(userId))
+                        .isDangerShareEnabled();
+
+                Map<String, String> data = dangerSharePayload(event, recipient.getValue(), showNotification);
+                invalidPushTokenCleaner.clear(pushSender.sendData(tokens, data));
+                sent += tokens.size();
             }
 
             log.debug("danger_share 발송 — {}건 (shareId={}, recipients={})",
@@ -219,6 +247,14 @@ public class PushDispatcher {
         } catch (RuntimeException e) {
             log.error("danger_share 발송 중 오류 (shareId={})", event.shareId(), e);
         }
+    }
+
+    // ── 내부 ────────────────────────────────────────────────
+
+    /** 설정 행이 없으면 기본값 — 가입·마이그레이션이 채우므로 정상이면 없을 일이 없습니다 */
+    private UserSettings settingsOf(Long userId) {
+        return userSettingsRepository.findById(userId)
+                .orElseGet(() -> UserSettings.defaults(userId));
     }
 
     private Map<String, String> dangerSharePayload(DangerShareEvent event, Long notificationId,

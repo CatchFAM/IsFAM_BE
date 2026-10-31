@@ -5,10 +5,8 @@ import com.isfam.common.model.ModelVersionPolicy;
 import com.isfam.domain.audit.entity.VoiceprintAccessLog;
 import com.isfam.domain.audit.service.DataDeletionLogger;
 import com.isfam.domain.audit.service.VoiceprintAccessLogger;
-import com.isfam.domain.auth.repository.UserRepository;
 import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
-import com.isfam.domain.notification.service.NotificationService;
 import com.isfam.domain.voice.entity.Voiceprint;
 import com.isfam.domain.voice.repository.VoiceprintRepository;
 import com.isfam.domain.voice.repository.VoiceprintSampleRepository;
@@ -37,7 +35,6 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * Phase 14 P-18 — {@code DELETE /me/voiceprint}.
@@ -45,6 +42,9 @@ import static org.mockito.Mockito.verifyNoInteractions;
  * <p>완료 기준: <b>임베딩 삭제 + 가족 폰 회수</b>. 회수는 {@code GET /family/embeddings} 가
  * 음성 없는 멤버를 removed_user_ids 로 내려보내는 기존 동작에 맡기고, 여기서는
  * 삭제 · 기록 2종 · 동기화 푸시 대상까지 확인합니다.
+ *
+ * <p>알림 설정 세분화 2단계에서 {@code NotificationService} 의존이 빠졌습니다 —
+ * 이 서비스는 등록·삭제 어느 쪽에서도 알림함을 만들지 않습니다.
  */
 @ExtendWith(MockitoExtension.class)
 class VoiceprintServiceDeleteTest {
@@ -58,8 +58,6 @@ class VoiceprintServiceDeleteTest {
     @Mock VoiceprintRepository voiceprintRepository;
     @Mock VoiceprintSampleRepository sampleRepository;
     @Mock FamilyMembershipRepository membershipRepository;
-    @Mock UserRepository userRepository;
-    @Mock NotificationService notificationService;
     @Mock VoiceprintAccessLogger accessLogger;
     @Mock DataDeletionLogger dataDeletionLogger;
     @Mock EmbeddingCipher embeddingCipher;
@@ -71,8 +69,7 @@ class VoiceprintServiceDeleteTest {
     @BeforeEach
     void setUp() {
         service = new VoiceprintService(voiceprintRepository, sampleRepository, membershipRepository,
-                userRepository, notificationService, accessLogger, dataDeletionLogger,
-                embeddingCipher, modelVersionPolicy, eventPublisher,
+                accessLogger, dataDeletionLogger, embeddingCipher, modelVersionPolicy, eventPublisher,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -98,9 +95,9 @@ class VoiceprintServiceDeleteTest {
                 USER_ID, DataDeletionLogger.Tables.VOICEPRINT_SAMPLES, 3, NOW, NOW);
     }
 
-    /** 가족 폰이 GET /family/embeddings 를 다시 부르도록 — 본인은 제외, 알림함은 만들지 않음 */
+    /** 가족 폰이 GET /family/embeddings 를 다시 부르도록 — 본인은 제외 */
     @Test
-    void wakesFamilyPhonesExceptSelfWithoutNotification() {
+    void wakesFamilyPhonesExceptSelf() {
         givenRegistered(3);
         givenFamilyOf(USER_ID, 8L, 9L);
 
@@ -111,7 +108,6 @@ class VoiceprintServiceDeleteTest {
         assertThat(event.getValue().targetUserIds()).containsExactlyInAnyOrder(8L, 9L);
         assertThat(event.getValue().reason()).isEqualTo(FamilySyncEvent.Reason.VOICEPRINT_DELETED);
         assertThat(event.getValue().familyId()).isEqualTo(FAMILY_ID);
-        verifyNoInteractions(notificationService);
     }
 
     /** 혼자 있는 공간이면 보낼 폰이 없습니다 */

@@ -20,9 +20,10 @@ import java.time.Instant;
 /**
  * 단말 1대.
  *
- * <p>주의 — <b>/settings 의 항목이 전부 이 테이블의 컬럼입니다.</b>
- * 알림 on/off, OS 권한 3종, 배터리 최적화 예외가 계정이 아니라 단말 단위로 관리됩니다.
- * 한 계정이 폰 두 대를 쓰면 각각 따로 설정됩니다.
+ * <p><b>OS 권한 3종(알림·마이크·파일)과 배터리 최적화 예외는 단말 단위입니다.</b>
+ * 폰마다 실제로 다른 값이라 여기 둡니다. 알림 on/off·자동분석 같은 사용자 선택은
+ * 알림 설정 세분화 1단계에서 계정 단위({@code user_settings})로 옮겼고,
+ * 3단계에서 {@code notification_enabled} 컬럼을 없앴습니다.
  *
  * <p><b>(user_id, push_token) 은 유니크입니다.</b> POST /devices 의 중복 판정 키인데
  * 인덱스만 걸려 있으면 동시 호출에서 조회-후-저장이 겹쳐 같은 조합의 row 가 둘 생깁니다.
@@ -129,10 +130,6 @@ public class Device extends BaseTimeEntity {
     @Column(name = "call_recording_enabled", nullable = false)
     private boolean callRecordingEnabled;
 
-    /** 앱 내 알림 on/off (PUT /settings) */
-    @Column(name = "notification_enabled", nullable = false)
-    private boolean notificationEnabled;
-
     @Column(name = "notification_permission", nullable = false)
     private boolean notificationPermission;
 
@@ -169,7 +166,6 @@ public class Device extends BaseTimeEntity {
         this.osVersion = osVersion;
         this.pushToken = pushToken;
         this.callRecordingSupported = callRecordingSupported;
-        this.notificationEnabled = true;
     }
 
     public static Device register(Long userId, Platform platform, String manufacturer,
@@ -219,10 +215,6 @@ public class Device extends BaseTimeEntity {
 
     public void updatePushToken(String pushToken) {
         this.pushToken = pushToken;
-    }
-
-    public void updateNotificationEnabled(boolean notificationEnabled) {
-        this.notificationEnabled = notificationEnabled;
     }
 
     /**

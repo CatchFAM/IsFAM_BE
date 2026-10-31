@@ -1,5 +1,7 @@
 package com.isfam.infra.push.event;
 
+import com.isfam.domain.notification.entity.Notification;
+
 /**
  * 알림창에 표시되고 알림함에도 남는 푸시.
  * {@code notifications} row 가 <b>이미 저장된 뒤</b> 발행됩니다 — {@code notificationId} 가
@@ -9,12 +11,16 @@ package com.isfam.infra.push.event;
  * 조립하지 않는 이유는 알림함과 푸시가 갈리면 안 되기 때문입니다 —
  * 탭해서 들어갔더니 다른 문구가 있으면 사용자는 알림이 두 개라고 생각합니다.
  *
+ * <p>{@code type} 은 알림 설정 세분화 3단계에서 추가됐습니다. {@code PushDispatcher} 가 이 값으로
+ * 어느 토글을 볼지 정합니다(위험·확인필요·안전·가족소식).
+ *
  * <p>{@code targetId} 는 null 일 수 있습니다({@code member_joined} 등).
  * FCM data 맵은 null 값을 못 받으므로 {@code PushDispatcher} 에서 걸러집니다.
  */
 public record UserNotificationEvent(
         Long userId,
         Long notificationId,
+        Notification.Type type,
         String title,
         String body,
         String targetType,

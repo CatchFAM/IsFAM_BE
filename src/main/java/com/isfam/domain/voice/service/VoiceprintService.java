@@ -8,12 +8,8 @@ import com.isfam.common.model.ModelVersionPolicy;
 import com.isfam.domain.audit.entity.VoiceprintAccessLog;
 import com.isfam.domain.audit.service.DataDeletionLogger;
 import com.isfam.domain.audit.service.VoiceprintAccessLogger;
-import com.isfam.domain.auth.entity.User;
-import com.isfam.domain.auth.repository.UserRepository;
 import com.isfam.domain.family.entity.FamilyMembership;
 import com.isfam.domain.family.repository.FamilyMembershipRepository;
-import com.isfam.domain.notification.entity.Notification;
-import com.isfam.domain.notification.service.NotificationService;
 import com.isfam.domain.voice.dto.VoiceprintDto;
 import com.isfam.domain.voice.entity.Voiceprint;
 import com.isfam.domain.voice.entity.VoiceprintSample;
@@ -55,6 +51,10 @@ import java.util.Set;
  * {@code GET /family/embeddings} 를 다시 불러 갱신된 평균을 받아가야 하기 때문입니다.
  * 푸시는 {@link FamilySyncEvent} 발행으로 끝내고 실제 발송은 커밋 후에 일어납니다.
  *
+ * <p><b>등록·삭제 모두 가족 알림함은 만들지 않습니다.</b> 등록 알림("○○님이 목소리를
+ * 등록했어요")은 알림 설정 세분화 2단계에서 없앴습니다. 가족 폰의 임베딩 갱신은 data-only
+ * 동기화 푸시가 맡고 있어, 알림은 사용자에게 소음일 뿐이었습니다.
+ *
  * <p><b>Phase 12 — 생체정보가 들어오고 나가는 두 지점을 기록합니다</b>(P-28).
  * 등록은 수집이고, 모델 계열 변경으로 샘플을 버리는 것은 파기입니다. 둘 다
  * {@code voiceprint_access_logs} 에 남습니다.
@@ -72,8 +72,6 @@ public class VoiceprintService {
     private final VoiceprintRepository voiceprintRepository;
     private final VoiceprintSampleRepository sampleRepository;
     private final FamilyMembershipRepository membershipRepository;
-    private final UserRepository userRepository;
-    private final NotificationService notificationService;
     private final VoiceprintAccessLogger accessLogger;
     private final DataDeletionLogger dataDeletionLogger;
     private final EmbeddingCipher embeddingCipher;
@@ -322,7 +320,7 @@ public class VoiceprintService {
     }
 
     /**
-     * 같은 공간 멤버 전원에게 동기화 푸시 + 본인 제외 알림함.
+     * 같은 공간 멤버 전원에게 동기화 푸시.
      *
      * <p>소속 공간이 없으면 아무 일도 하지 않습니다 — 등록 자체는 성공입니다.
      *
@@ -331,7 +329,8 @@ public class VoiceprintService {
      * 본인 임베딩은 어차피 {@code GET /family/embeddings} 응답에서 제외되므로
      * 한 번 더 깨워도 받아가는 게 없습니다.
      *
-     * <p>알림함은 본인을 뺍니다. 방금 녹음을 끝낸 사람에게 "목소리가 등록됐어요"는 소음입니다.
+     * <p><b>알림함은 만들지 않습니다</b>(알림 설정 세분화 2단계). data-only 푸시라
+     * 알림창에도 아무것도 뜨지 않고, 앱이 백그라운드에서 임베딩만 갱신합니다.
      */
     private void publishSync(Long userId, Instant now) {
         Optional<FamilyMembership> membership =
@@ -346,21 +345,10 @@ public class VoiceprintService {
         membershipRepository.findByFamilyIdAndStatusOrderByJoinedAtAsc(familyId, ACTIVE)
                 .forEach(item -> syncTargets.add(item.getUserId()));
 
-        String displayName = userRepository.findById(userId)
-                .map(User::getDisplayName)
-                .orElse("구성원");
-
-        Set<Long> notifyTargets = new HashSet<>(syncTargets);
-        notifyTargets.remove(userId);
-        notifyTargets.forEach(memberId ->
-                notificationService.create(
-                        Notification.voiceprintRegistered(memberId, displayName)));
-
         eventPublisher.publishEvent(new FamilySyncEvent(
                 syncTargets, FamilySyncEvent.Reason.VOICEPRINT_UPDATED, familyId, now));
 
-        log.debug("음성 등록 동기화 — 대상 {}건, 알림 {}건 (familyId={})",
-                syncTargets.size(), notifyTargets.size(), familyId);
+        log.debug("음성 등록 동기화 — 대상 {}건 (familyId={})", syncTargets.size(), familyId);
     }
 
     /**

@@ -12,6 +12,8 @@ import com.isfam.domain.analysis.entity.VoiceAnalysis;
 import com.isfam.domain.analysis.repository.CallEventRepository;
 import com.isfam.domain.analysis.repository.SpoofCheckRepository;
 import com.isfam.domain.analysis.repository.VoiceAnalysisRepository;
+import com.isfam.domain.device.entity.UserSettings;
+import com.isfam.domain.device.repository.UserSettingsRepository;
 import com.isfam.domain.notification.entity.Notification;
 import com.isfam.domain.notification.repository.DangerShareRepository;
 import com.isfam.domain.notification.repository.NotificationRepository;
@@ -50,7 +52,9 @@ public class VoiceAnalysisService {
     private final SpoofCheckRepository spoofCheckRepository;
     private final NotificationRepository notificationRepository;
     private final DangerShareRepository dangerShareRepository;
+    private final UserSettingsRepository userSettingsRepository;
     private final NotificationService notificationService;
+    private final AutoAnalysisGuard autoAnalysisGuard;
     private final ModelVersionPolicy modelVersionPolicy;
     private final Clock clock;
 
@@ -59,20 +63,22 @@ public class VoiceAnalysisService {
     /**
      * {@code POST /voice-analyses}.
      *
-     * <p><b>검사 순서</b> — 모델 버전(MODEL_001) → 소유권(404) → 짝 검증 → 중복.
-     * 버전을 먼저 보는 이유는 {@code VoiceprintService} 와 같습니다. 재시도로 해결되지 않는
-     * 유일한 조건이라, 앱이 곧장 "업데이트해 주세요"로 분기해야 합니다.
+     * <p><b>검사 순서</b> — 자동 분석 설정(ANALYSIS_001) → 모델 버전(MODEL_001) → 소유권(404)
+     * → 짝 검증 → 중복. 앞의 둘은 재시도로 해결되지 않는 조건이라 먼저 봅니다.
+     * 그중 설정이 맨 앞인 이유는, 사용자가 분석을 껐다면 버전이 맞든 틀리든 처리하지 않아야
+     * 하기 때문입니다(알림 설정 세분화 5단계). 분석 도중에 설정을 끈 경우에도 결과를 받지 않습니다.
      *
      * <p><b>저장 · 상태 전이 · 알림이 한 트랜잭션입니다.</b> 명세 [정책] 그대로이고,
      * 갈라두면 "분석 결과는 있는데 call_events 는 detected" 같은 조합이 생깁니다.
      * 푸시만 커밋 이후에 나갑니다({@code PushDispatcher} 의 AFTER_COMMIT).
      *
      * <p><b>재제출은 기존 결과를 그대로 돌려줍니다.</b> 앱이 응답을 못 받고 재시도하는 건
-     * 흔한 일인데, 그때마다 새 row 를 만들면 {@code danger_call} 알림도 같이 늘어납니다.
+     * 흔한 일인데, 그때마다 새 row 를 만들면 알림도 같이 늘어납니다.
      * 위험 알림이 두 번 오는 건 사용자 입장에서 "통화가 두 번 위험했다"로 읽힙니다.
      */
     @Transactional
     public VoiceAnalysisDto.Item submit(Long userId, VoiceAnalysisDto.SubmitRequest request) {
+        autoAnalysisGuard.requireEnabled(userId);
         modelVersionPolicy.requireSupported(request.onDeviceModelVersion());
 
         CallEvent callEvent = callEventRepository
@@ -121,7 +127,7 @@ public class VoiceAnalysisService {
         Instant now = clock.instant();
 
         // saveAndFlush 인 이유는 analysis_id 가 필요해서입니다 —
-        // call_events.voice_analysis_id 와 danger_call 알림의 target_id 가 이 값입니다.
+        // call_events.voice_analysis_id 와 알림의 target_id 가 이 값입니다.
         VoiceAnalysis saved = voiceAnalysisRepository.saveAndFlush(VoiceAnalysis.submit(
                 userId,
                 callEvent.getId(),
@@ -134,12 +140,7 @@ public class VoiceAnalysisService {
 
         callEvent.linkAnalysis(saved.getId());
 
-        if (decision.requiresNotification()) {
-            // 본문에 가족 이름이 들어갈 여지가 없도록 팩토리가 문구를 고정하고 있습니다.
-            // 구체적인 안내("엄마 목소리로 확인됐어요")는 폰 로컬 알림 담당입니다.
-            notificationService.create(Notification.dangerCall(userId, saved.getId()));
-            log.debug("위험 통화 알림 생성 — analysisId={}, decision={}", saved.getId(), decision);
-        }
+        createAnalysisNotification(userId, saved.getId(), decision);
 
         return VoiceAnalysisDto.Item.of(saved, spoofCheck.getSpoofScore());
     }
@@ -202,7 +203,7 @@ public class VoiceAnalysisService {
      *   <li>{@code call_events.voice_analysis_id} 를 null 로 — 참조가 남으면 나중에
      *       존재하지 않는 분석을 가리킵니다. 상태는 {@code analyzed_on_device} 로 두는데,
      *       분석이 실제로 일어났다는 사실까지 거짓이 되는 건 아니기 때문입니다</li>
-     *   <li>이 분석을 가리키던 {@code danger_call} 알림 삭제 — 남겨두면 사용자가 탭했을 때
+     *   <li>이 분석을 가리키던 통화 분석 알림(위험·확인필요·안전) 삭제 — 남겨두면 사용자가 탭했을 때
      *       404 를 만납니다. 알림함에 열리지 않는 항목이 남는 것보다 사라지는 편이 낫습니다</li>
      *   <li>이 분석의 위험 통화 공유({@code danger_shares}) 삭제 — 분석이 사라지면 공유의
      *       근거도 사라지고, 의심 번호를 더 들고 있을 이유가 없습니다. 받은 가족은 이미 폰에
@@ -223,6 +224,7 @@ public class VoiceAnalysisService {
         callEventRepository.findByIdAndUserId(analysis.getCallEventId(), userId)
                 .ifPresent(CallEvent::unlinkAnalysis);
 
+        // 판정별 3종 모두 target_type = VOICE_ANALYSIS 라 한 번에 지워집니다
         int removedNotifications = notificationRepository.deleteByTarget(
                 userId, Notification.TargetType.VOICE_ANALYSIS, analysisId);
 
@@ -236,6 +238,46 @@ public class VoiceAnalysisService {
     }
 
     // ── 내부 ────────────────────────────────────────────────
+
+    /**
+     * 판정별 알림함 생성 (알림 설정 세분화 2단계).
+     *
+     * <ul>
+     *   <li>위험 · 확인 필요 — <b>설정과 무관하게 항상</b> 알림함에 남깁니다.
+     *       토글을 꺼도 끄는 건 푸시뿐입니다(3단계에서 PushDispatcher 가 거름)</li>
+     *   <li>안전 — 안전 결과 알림이 <b>켜져 있을 때만</b> 만듭니다. 정상 통화마다 쌓이므로
+     *       꺼져 있으면 알림함에도 남기지 않습니다. 유일한 예외입니다</li>
+     * </ul>
+     *
+     * <p>설정 행이 없으면 기본값(안전 OFF)으로 봅니다 — 가입·마이그레이션이 채우므로 정상이면 없을 일이 없습니다.
+     *
+     * <p>본문에 가족 이름이 들어갈 여지가 없도록 팩토리가 문구를 고정하고 있습니다.
+     * 구체적인 안내("엄마 목소리로 확인됐어요")는 폰 로컬 알림 담당입니다.
+     */
+    private void createAnalysisNotification(Long userId, Long analysisId,
+                                            VoiceAnalysis.FinalDecision decision) {
+        Notification notification = switch (decision) {
+            case DANGER -> Notification.dangerCall(userId, analysisId);
+            case NEEDS_CHECK -> Notification.needsCheckCall(userId, analysisId);
+            case NORMAL -> isNormalNotificationEnabled(userId)
+                    ? Notification.normalCall(userId, analysisId)
+                    : null;
+        };
+
+        if (notification == null) {
+            log.debug("안전 결과 알림 꺼짐 — 알림함 생략 (analysisId={})", analysisId);
+            return;
+        }
+
+        notificationService.create(notification);
+        log.debug("통화 분석 알림 생성 — analysisId={}, decision={}", analysisId, decision);
+    }
+
+    private boolean isNormalNotificationEnabled(Long userId) {
+        return userSettingsRepository.findById(userId)
+                .orElseGet(() -> UserSettings.defaults(userId))
+                .isNormalNotificationEnabled();
+    }
 
     /**
      * {@code Collectors.toMap} 을 쓰지 않는 이유는 거부·실패 row 의 {@code spoofScore} 가

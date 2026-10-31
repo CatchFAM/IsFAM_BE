@@ -7,6 +7,7 @@ import com.isfam.domain.auth.entity.UserAgreement;
 import com.isfam.domain.auth.repository.RefreshTokenRepository;
 import com.isfam.domain.auth.repository.UserAgreementRepository;
 import com.isfam.domain.auth.repository.UserRepository;
+import com.isfam.domain.device.repository.UserSettingsRepository;
 import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
 import com.isfam.common.security.JwtTokenProvider;
@@ -34,17 +35,16 @@ import java.util.List;
 public class AuthService {
 
     /**
-     * 동의 이력에 함께 남기는 약관 버전. 문안이 바뀌면 올리세요.
+     * 동의 이력에 함께 남기는 약관 버전. 값과 변경 이력은 {@link UserAgreement#CURRENT_VERSION} 에 있습니다.
      *
-     * <p>v1.1 — 가족과 전화번호 공유(PHONE_SHARING) 항목 추가.
-     * <p>v1.2 — 음성 정보 가족 공유(VOICE_SHARING)를 초대 수락에서 가입 화면으로 이동.
-     * 가입 화면 문구가 바뀌었으므로 같은 화면의 나머지 6종도 v1.2 로 기록됩니다.
+     * <p>설정 화면의 마케팅 수신 변경(SettingsService)도 같은 값을 써야 해서 거기로 옮겼습니다.
      */
-    private static final String AGREEMENT_VERSION = "v1.2";
+    private static final String AGREEMENT_VERSION = UserAgreement.CURRENT_VERSION;
 
     private final UserRepository userRepository;
     private final UserAgreementRepository userAgreementRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final UserSettingsRepository userSettingsRepository;
     private final PhoneVerificationService phoneVerificationService;
     private final JwtTokenProvider jwtTokenProvider;
     private final PasswordEncoder passwordEncoder;
@@ -63,6 +63,10 @@ public class AuthService {
      * <p><b>나이 확인이 동의 검사보다도 먼저입니다</b> (Phase 14, P-08). 만 14세 미만이면
      * 법정대리인 동의 없이 받은 본인 동의가 효력이 없습니다(법 제22조의2) — 동의를 따지기
      * 전에 걸러야 앱도 "약관 동의" 대신 "가입할 수 없어요"를 보여줄 수 있습니다.
+     *
+     * <p><b>설정 기본값 행도 여기서 만듭니다</b> (알림 설정 세분화). 같은 트랜잭션이라 가입이
+     * 롤백되면 설정 행도 남지 않습니다. 기본값은 설정 화면 기본 상태와 같습니다 — 자동분석 ON,
+     * 위험·확인필요 ON, 안전 OFF, 가족 소식 ON. 마케팅은 여기가 아니라 동의 이력(MARKETING)을 따릅니다.
      */
     @Transactional
     public AuthDto.TokenResponse signup(AuthDto.SignupRequest request) {
@@ -97,6 +101,7 @@ public class AuthService {
                 request.displayName()));
 
         saveAgreements(user.getId(), request, now);
+        userSettingsRepository.insertDefaultsIfAbsent(user.getId(), now);
 
         AuthDto.TokenResponse tokens = issueTokens(user.getId());
         return AuthDto.TokenResponse.of(user.getId(), user.getDisplayName(),

@@ -18,6 +18,10 @@ import java.time.Instant;
 /**
  * 동의 이력. <b>시각과 약관 버전을 함께</b> 남깁니다(legal-compliance.md 8장).
  *
+ * <p><b>행을 고치지 않고 쌓습니다.</b> 동의를 바꾸면(지금은 마케팅만 가능) 새 행이 추가되고,
+ * 현재 상태는 그 항목의 <b>가장 최근 행</b>입니다. 언제 동의했고 언제 거부했는지가 그대로 남아야
+ * 분쟁·실태점검 때 증명할 수 있습니다.
+ *
  * <p>회원 탈퇴 시에도 분쟁 대비로 보관합니다 — 익명화된 user_id 에 연결된 채로 남습니다.
  */
 @Getter
@@ -27,6 +31,17 @@ import java.time.Instant;
 })
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class UserAgreement {
+
+    /**
+     * 현재 약관 버전. 가입 화면·설정 화면 문구가 바뀌면 올리세요.
+     *
+     * <p>v1.1 — 가족과 전화번호 공유(PHONE_SHARING) 항목 추가.
+     * <p>v1.2 — 음성 정보 가족 공유(VOICE_SHARING)를 초대 수락에서 가입 화면으로 이동.
+     *
+     * <p>가입(AuthService)과 마케팅 수신 변경(SettingsService)이 같은 값을 씁니다 —
+     * 마케팅 문구는 가입 화면의 그 항목과 같은 문구이기 때문입니다.
+     */
+    public static final String CURRENT_VERSION = "v1.2";
 
     /**
      * 동의 항목. 법 제23조상 민감정보 처리와 제3자 제공은 별도 항목이어야 합니다.
@@ -48,7 +63,15 @@ public class UserAgreement {
         PRIVACY,
         /** 음성 민감정보 처리 (필수) — 내 음성을 특징값으로 변환 */
         VOICE_PRINT,
-        /** 마케팅 수신 (선택) */
+        /**
+         * 마케팅 수신 (선택).
+         *
+         * <p><b>유일하게 가입 후에 바꿀 수 있는 항목입니다</b> — 설정 화면의 마케팅 정보 수신 토글
+         * ({@code PUT /settings/marketing}). 바꿀 때마다 행이 하나씩 쌓이고, 현재 상태와
+         * 화면에 보이는 처리일("2026.07.12 수신 거부")은 가장 최근 행입니다.
+         * 그래서 이 항목은 {@code existsBy...AgreedTrue} 로 판정하면 안 됩니다 —
+         * 과거에 한 번이라도 동의했으면 지금 거부 중이어도 true 가 나옵니다.
+         */
         MARKETING,
         /**
          * 음성 제3자 제공 (가입 시 필수) — 내 임베딩이 가족 기기로 복제되는 것 (P-07).
