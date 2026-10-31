@@ -15,10 +15,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 설정 — 알림·자동분석은 계정 단위, OS 권한은 기기 단위입니다.
+ * 설정 — 알림·자동분석은 계정 단위, 마케팅 수신은 동의 이력, OS 권한은 기기 단위입니다.
  * 응답은 둘을 합쳐 설정 화면 한 장 분량으로 내려줍니다.
  */
-@Tag(name = "settings", description = "알림 · 자동분석 설정 · OS 권한 동기화")
+@Tag(name = "settings", description = "알림 · 자동분석 · 마케팅 수신 설정 · OS 권한 동기화")
 @RestController
 @RequestMapping("/settings")
 @RequiredArgsConstructor
@@ -41,6 +41,19 @@ public class SettingsController {
             @DeviceId Long deviceId,
             @RequestBody SettingsDto.UpdateRequest request) {
         return settingsService.update(userId, deviceId, request);
+    }
+
+    /**
+     * 마케팅 정보 수신 동의·철회. 동의 이력이라 {@code PUT /settings} 와 따로 받습니다.
+     * 같은 값을 다시 보내면 이력을 추가하지 않습니다.
+     */
+    @Operation(summary = "마케팅 정보 수신 동의·철회")
+    @PutMapping("/marketing")
+    public SettingsDto.SettingsResponse updateMarketing(
+            @CurrentUser Long userId,
+            @DeviceId Long deviceId,
+            @Valid @RequestBody SettingsDto.MarketingRequest request) {
+        return settingsService.updateMarketing(userId, deviceId, request.marketingAgreed());
     }
 
     /** 앱 실행 시마다 OS 권한을 재확인해 동기화합니다 */

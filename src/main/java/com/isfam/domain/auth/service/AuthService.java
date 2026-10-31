@@ -35,13 +35,11 @@ import java.util.List;
 public class AuthService {
 
     /**
-     * 동의 이력에 함께 남기는 약관 버전. 문안이 바뀌면 올리세요.
+     * 동의 이력에 함께 남기는 약관 버전. 값과 변경 이력은 {@link UserAgreement#CURRENT_VERSION} 에 있습니다.
      *
-     * <p>v1.1 — 가족과 전화번호 공유(PHONE_SHARING) 항목 추가.
-     * <p>v1.2 — 음성 정보 가족 공유(VOICE_SHARING)를 초대 수락에서 가입 화면으로 이동.
-     * 가입 화면 문구가 바뀌었으므로 같은 화면의 나머지 6종도 v1.2 로 기록됩니다.
+     * <p>설정 화면의 마케팅 수신 변경(SettingsService)도 같은 값을 써야 해서 거기로 옮겼습니다.
      */
-    private static final String AGREEMENT_VERSION = "v1.2";
+    private static final String AGREEMENT_VERSION = UserAgreement.CURRENT_VERSION;
 
     private final UserRepository userRepository;
     private final UserAgreementRepository userAgreementRepository;

@@ -2,6 +2,8 @@ package com.isfam.domain.device.service;
 
 import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
+import com.isfam.domain.auth.entity.UserAgreement;
+import com.isfam.domain.auth.repository.UserAgreementRepository;
 import com.isfam.domain.device.dto.SettingsDto;
 import com.isfam.domain.device.entity.Device;
 import com.isfam.domain.device.entity.UserSettings;
@@ -21,6 +23,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -34,6 +37,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
  *   <li>마스터는 계산값 — 하위 셋 중 하나라도 ON 이면 ON</li>
  *   <li>마스터 OFF → 셋 다 OFF, 마스터 ON → 셋 다 ON (이전 값 복원 없음)</li>
  *   <li>보낸 항목만 바뀜, 마스터와 하위를 같이 보내면 422</li>
+ *   <li>4단계 — 마케팅 수신은 동의 이력에 행 추가, 같은 값이면 추가하지 않음, 최신 행이 현재 상태</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -44,6 +48,7 @@ class SettingsServiceTest {
     private static final Long DEVICE_ID = 5L;
 
     @Mock UserSettingsRepository userSettingsRepository;
+    @Mock UserAgreementRepository userAgreementRepository;
     @Mock DeviceRepository deviceRepository;
 
     private SettingsService service;
@@ -51,8 +56,8 @@ class SettingsServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SettingsService(userSettingsRepository, deviceRepository,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new SettingsService(userSettingsRepository, userAgreementRepository,
+                deviceRepository, Clock.fixed(NOW, ZoneOffset.UTC));
         settings = UserSettings.defaults(USER_ID);
     }
 
@@ -210,6 +215,101 @@ class SettingsServiceTest {
                 .extracting("errorCode").isEqualTo(ErrorCode.DEVICE_002);
 
         verifyNoInteractions(userSettingsRepository);
+    }
+
+    // ── 마케팅 수신 (4단계) ────────────────────────────────
+
+    private static final Instant SIGNUP = Instant.parse("2026-07-12T03:00:00Z");
+
+    @Test
+    void marketingStateIsLatestAgreementRow() {
+        givenMyDevice();
+        given(userSettingsRepository.findById(USER_ID)).willReturn(Optional.of(settings));
+        givenLatestMarketing(false, SIGNUP);
+
+        SettingsDto.SettingsResponse response = service.get(USER_ID, DEVICE_ID);
+
+        assertThat(response.marketingAgreed()).isFalse();
+        assertThat(response.marketingChangedAt()).isEqualTo(SIGNUP);
+    }
+
+    /** 기록이 없는 오래된 계정 — 거부로 보고 날짜는 null (옵트인) */
+    @Test
+    void marketingWithoutRecordIsNotAgreed() {
+        givenMyDevice();
+        given(userSettingsRepository.findById(USER_ID)).willReturn(Optional.of(settings));
+
+        SettingsDto.SettingsResponse response = service.get(USER_ID, DEVICE_ID);
+
+        assertThat(response.marketingAgreed()).isFalse();
+        assertThat(response.marketingChangedAt()).isNull();
+    }
+
+    /** 바꾸면 행을 고치지 않고 새로 쌓습니다 — 시각·현재 약관 버전과 함께 */
+    @Test
+    void changingMarketingAppendsAgreementRow() {
+        givenMyDevice();
+        given(userSettingsRepository.findById(USER_ID)).willReturn(Optional.of(settings));
+        givenLatestMarketing(false, SIGNUP);
+        given(userAgreementRepository.save(any(UserAgreement.class)))
+                .willAnswer(invocation -> invocation.getArgument(0));
+
+        SettingsDto.SettingsResponse response = service.updateMarketing(USER_ID, DEVICE_ID, true);
+
+        org.mockito.ArgumentCaptor<UserAgreement> saved =
+                org.mockito.ArgumentCaptor.forClass(UserAgreement.class);
+        verify(userAgreementRepository).save(saved.capture());
+        assertThat(saved.getValue().getAgreementType()).isEqualTo(UserAgreement.Type.MARKETING);
+        assertThat(saved.getValue().isAgreed()).isTrue();
+        assertThat(saved.getValue().getAgreedAt()).isEqualTo(NOW);
+        assertThat(saved.getValue().getAgreementVersion()).isEqualTo(UserAgreement.CURRENT_VERSION);
+
+        assertThat(response.marketingAgreed()).isTrue();
+        assertThat(response.marketingChangedAt()).isEqualTo(NOW);
+    }
+
+    /** 같은 값이면 이력을 추가하지 않고 처음 정한 날짜를 그대로 돌려줍니다 */
+    @Test
+    void sameMarketingValueIsIdempotent() {
+        givenMyDevice();
+        given(userSettingsRepository.findById(USER_ID)).willReturn(Optional.of(settings));
+        givenLatestMarketing(false, SIGNUP);
+
+        SettingsDto.SettingsResponse response = service.updateMarketing(USER_ID, DEVICE_ID, false);
+
+        verify(userAgreementRepository, never()).save(any());
+        assertThat(response.marketingChangedAt()).isEqualTo(SIGNUP);
+    }
+
+    /** 기록이 없던 계정은 거부를 보내도 첫 기록으로 남깁니다 — "물었는데 거부했다"를 남기기 위해 */
+    @Test
+    void firstMarketingDecisionIsRecordedEvenIfRefused() {
+        givenMyDevice();
+        given(userSettingsRepository.findById(USER_ID)).willReturn(Optional.of(settings));
+        given(userAgreementRepository.save(any(UserAgreement.class)))
+                .willAnswer(invocation -> invocation.getArgument(0));
+
+        service.updateMarketing(USER_ID, DEVICE_ID, false);
+
+        verify(userAgreementRepository).save(any(UserAgreement.class));
+    }
+
+    @Test
+    void marketingOnOtherUsersDeviceIsRejected() {
+        given(deviceRepository.findByIdAndUserId(DEVICE_ID, USER_ID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.updateMarketing(USER_ID, DEVICE_ID, true))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.DEVICE_002);
+
+        verifyNoInteractions(userAgreementRepository);
+    }
+
+    private void givenLatestMarketing(boolean agreed, Instant at) {
+        given(userAgreementRepository.findFirstByUserIdAndAgreementTypeOrderByAgreedAtDescIdDesc(
+                eq(USER_ID), eq(UserAgreement.Type.MARKETING)))
+                .willReturn(Optional.of(UserAgreement.of(
+                        USER_ID, UserAgreement.Type.MARKETING, agreed, "v1.2", at)));
     }
 
     // ── 내부 ──────────────────────────────────────────────
