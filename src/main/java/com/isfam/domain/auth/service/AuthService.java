@@ -7,6 +7,7 @@ import com.isfam.domain.auth.entity.UserAgreement;
 import com.isfam.domain.auth.repository.RefreshTokenRepository;
 import com.isfam.domain.auth.repository.UserAgreementRepository;
 import com.isfam.domain.auth.repository.UserRepository;
+import com.isfam.domain.device.repository.UserSettingsRepository;
 import com.isfam.common.error.BusinessException;
 import com.isfam.common.error.ErrorCode;
 import com.isfam.common.security.JwtTokenProvider;
@@ -45,6 +46,7 @@ public class AuthService {
     private final UserRepository userRepository;
     private final UserAgreementRepository userAgreementRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final UserSettingsRepository userSettingsRepository;
     private final PhoneVerificationService phoneVerificationService;
     private final JwtTokenProvider jwtTokenProvider;
     private final PasswordEncoder passwordEncoder;
@@ -63,6 +65,10 @@ public class AuthService {
      * <p><b>나이 확인이 동의 검사보다도 먼저입니다</b> (Phase 14, P-08). 만 14세 미만이면
      * 법정대리인 동의 없이 받은 본인 동의가 효력이 없습니다(법 제22조의2) — 동의를 따지기
      * 전에 걸러야 앱도 "약관 동의" 대신 "가입할 수 없어요"를 보여줄 수 있습니다.
+     *
+     * <p><b>설정 기본값 행도 여기서 만듭니다</b> (알림 설정 세분화). 같은 트랜잭션이라 가입이
+     * 롤백되면 설정 행도 남지 않습니다. 기본값은 설정 화면 기본 상태와 같습니다 — 자동분석 ON,
+     * 위험·확인필요 ON, 안전 OFF, 가족 소식 ON. 마케팅은 여기가 아니라 동의 이력(MARKETING)을 따릅니다.
      */
     @Transactional
     public AuthDto.TokenResponse signup(AuthDto.SignupRequest request) {
@@ -97,6 +103,7 @@ public class AuthService {
                 request.displayName()));
 
         saveAgreements(user.getId(), request, now);
+        userSettingsRepository.insertDefaultsIfAbsent(user.getId(), now);
 
         AuthDto.TokenResponse tokens = issueTokens(user.getId());
         return AuthDto.TokenResponse.of(user.getId(), user.getDisplayName(),

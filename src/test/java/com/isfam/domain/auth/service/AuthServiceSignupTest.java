@@ -10,6 +10,7 @@ import com.isfam.domain.auth.entity.UserAgreement;
 import com.isfam.domain.auth.repository.RefreshTokenRepository;
 import com.isfam.domain.auth.repository.UserAgreementRepository;
 import com.isfam.domain.auth.repository.UserRepository;
+import com.isfam.domain.device.repository.UserSettingsRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -42,8 +43,9 @@ import static org.mockito.Mockito.verifyNoInteractions;
  *   <li>P-08 — 만 14세 미만 차단(age_over_14). 누락·false → AUTH_010, 동의 검사보다 먼저</li>
  *   <li>음성 정보 가족 공유(voice_sharing_agreed) — 필수. 누락·거부 → AUTH_007</li>
  *   <li>가족과 전화번호 공유(phone_sharing_agreed) — 필수. 누락·거부 → AUTH_007</li>
+ *   <li>알림 설정 세분화 — 가입 시 user_settings 기본값 행 생성. 거절된 가입은 만들지 않음</li>
  * </ul>
- * 완료 기준: <b>가입 1건 → user_agreements 7건</b>.
+ * 완료 기준: <b>가입 1건 → user_agreements 7건 + user_settings 1건</b>.
  */
 @ExtendWith(MockitoExtension.class)
 class AuthServiceSignupTest {
@@ -55,6 +57,7 @@ class AuthServiceSignupTest {
     @Mock UserRepository userRepository;
     @Mock UserAgreementRepository userAgreementRepository;
     @Mock RefreshTokenRepository refreshTokenRepository;
+    @Mock UserSettingsRepository userSettingsRepository;
     @Mock PhoneVerificationService phoneVerificationService;
     @Mock JwtTokenProvider jwtTokenProvider;
     @Mock PasswordEncoder passwordEncoder;
@@ -66,7 +69,7 @@ class AuthServiceSignupTest {
     @BeforeEach
     void setUp() {
         service = new AuthService(userRepository, userAgreementRepository, refreshTokenRepository,
-                phoneVerificationService, jwtTokenProvider, passwordEncoder,
+                userSettingsRepository, phoneVerificationService, jwtTokenProvider, passwordEncoder,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -100,6 +103,16 @@ class AuthServiceSignupTest {
                     // 가입 화면 문구가 바뀌어 7종 모두 같은 새 버전으로 남습니다
                     assertThat(agreement.getAgreementVersion()).isEqualTo("v1.2");
                 });
+    }
+
+    /** 설정 화면 기본값 행 — 같은 트랜잭션이라 가입이 롤백되면 함께 사라집니다 */
+    @Test
+    void signupCreatesDefaultSettingsRow() {
+        givenSignupSucceeds();
+
+        service.signup(request(true, true, true, true, true, true, false));
+
+        verify(userSettingsRepository).insertDefaultsIfAbsent(USER_ID, NOW);
     }
 
     // ── 14세 미만 (P-08) ────────────────────────────────────
@@ -174,14 +187,15 @@ class AuthServiceSignupTest {
 
     /**
      * 나이·동의 검사는 번호 인증 토큰 소비보다 먼저입니다 — 체크박스 하나 때문에
-     * 인증번호를 다시 받게 만들지 않습니다. 계정·동의 이력도 남지 않아야 합니다.
+     * 인증번호를 다시 받게 만들지 않습니다. 계정·동의 이력·설정 행도 남지 않아야 합니다.
      */
     private void assertRejectedBeforeAnything(AuthDto.SignupRequest request, ErrorCode expected) {
         assertThatThrownBy(() -> service.signup(request))
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(expected);
 
-        verifyNoInteractions(phoneVerificationService, userAgreementRepository, refreshTokenRepository);
+        verifyNoInteractions(phoneVerificationService, userAgreementRepository,
+                refreshTokenRepository, userSettingsRepository);
         verify(userRepository, never()).save(any());
     }
 

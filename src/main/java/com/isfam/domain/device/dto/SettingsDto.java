@@ -1,13 +1,16 @@
 package com.isfam.domain.device.dto;
 
 import com.isfam.domain.device.entity.Device;
+import com.isfam.domain.device.entity.UserSettings;
 import jakarta.validation.constraints.NotNull;
+
+import java.util.stream.Stream;
 
 /**
  * /settings/** 의 요청·응답.
  *
- * <p>설정 항목이 devices 테이블 컬럼이라 실제로는 단말 단위 설정입니다.
- * 폰 두 대를 쓰면 각각 따로 잡힙니다.
+ * <p><b>섞여 있는 두 단위.</b> 알림·자동분석은 계정 단위({@code user_settings}),
+ * OS 권한 3종은 기기 단위({@code devices})입니다. 응답은 둘을 합쳐 한 화면 분량으로 내려줍니다.
  */
 public final class SettingsDto {
 
@@ -16,13 +19,35 @@ public final class SettingsDto {
 
     /**
      * GET /settings · PUT /settings · PUT /settings/permissions 공용 응답.
-     * battery_optimization_ignored 는 저장만 하고 응답에는 넣지 않습니다(명세 형태 유지).
+     *
+     * <p>{@code analysis_notification_enabled}(마스터)는 저장값이 아니라 계산값입니다 —
+     * 위험·확인필요·안전 중 하나라도 켜져 있으면 true.
+     *
+     * <p>{@code danger_share_enabled} 는 앱 화면에 노출하지 않는 항목입니다. 응답에는 싣지만
+     * 앱은 무시하면 됩니다.
+     *
+     * <p>{@code battery_optimization_ignored} 는 저장만 하고 응답에는 넣지 않습니다(명세 형태 유지).
      */
-    public record SettingsResponse(boolean notificationEnabled, Permissions permissions) {
+    public record SettingsResponse(
+            boolean autoAnalysisEnabled,
+            boolean analysisNotificationEnabled,
+            boolean dangerNotificationEnabled,
+            boolean needsCheckNotificationEnabled,
+            boolean normalNotificationEnabled,
+            boolean familyNewsEnabled,
+            boolean dangerShareEnabled,
+            Permissions permissions
+    ) {
 
-        public static SettingsResponse from(Device device) {
+        public static SettingsResponse of(UserSettings settings, Device device) {
             return new SettingsResponse(
-                    device.isNotificationEnabled(),
+                    settings.isAutoAnalysisEnabled(),
+                    settings.isAnalysisNotificationEnabled(),
+                    settings.isDangerNotificationEnabled(),
+                    settings.isNeedsCheckNotificationEnabled(),
+                    settings.isNormalNotificationEnabled(),
+                    settings.isFamilyNewsEnabled(),
+                    settings.isDangerShareEnabled(),
                     new Permissions(
                             device.isNotificationPermission(),
                             device.isMicrophonePermission(),
@@ -37,10 +62,38 @@ public final class SettingsDto {
     ) {
     }
 
-    public record NotificationRequest(
-            @NotNull(message = "알림 설정 값이 필요해요")
-            Boolean notificationEnabled
+    /**
+     * PUT /settings — <b>보낸 항목만 바뀝니다</b>(null = 그대로).
+     *
+     * <p>화면에서 토글 하나를 누를 때마다 그 항목 하나만 보내는 흐름을 전제로 합니다.
+     * 전체를 보내게 하면 두 기기에서 동시에 다른 토글을 눌렀을 때 한쪽 변경이 덮입니다.
+     *
+     * <p><b>마스터와 하위 3개는 같이 보낼 수 없습니다.</b> "마스터 OFF + 안전 ON" 처럼 서로 어긋난
+     * 요청을 어느 쪽 우선으로 처리할지 정하는 대신 422 로 거절합니다 — 화면에서는 한 번에 하나만 누릅니다.
+     */
+    public record UpdateRequest(
+            Boolean autoAnalysisEnabled,
+            Boolean analysisNotificationEnabled,
+            Boolean dangerNotificationEnabled,
+            Boolean needsCheckNotificationEnabled,
+            Boolean normalNotificationEnabled,
+            Boolean familyNewsEnabled,
+            Boolean dangerShareEnabled
     ) {
+
+        public boolean isEmpty() {
+            return Stream.of(autoAnalysisEnabled, analysisNotificationEnabled,
+                            dangerNotificationEnabled, needsCheckNotificationEnabled,
+                            normalNotificationEnabled, familyNewsEnabled, dangerShareEnabled)
+                    .allMatch(value -> value == null);
+        }
+
+        public boolean mixesMasterWithSub() {
+            return analysisNotificationEnabled != null
+                    && (dangerNotificationEnabled != null
+                    || needsCheckNotificationEnabled != null
+                    || normalNotificationEnabled != null);
+        }
     }
 
     /** 앱 실행 시마다 OS 권한을 다시 확인해 보내옵니다 */

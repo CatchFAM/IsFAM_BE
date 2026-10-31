@@ -47,6 +47,8 @@ public class DataDeletionLogger {
         public static final String CALL_EVENTS = "call_events";
         public static final String NOTIFICATIONS = "notifications";
         public static final String DEVICES = "devices";
+        /** 계정 단위 알림·자동분석 설정. 탈퇴 시 삭제 (보관기간 배치 대상 아님) */
+        public static final String USER_SETTINGS = "user_settings";
         public static final String FAMILY_MEMBER_ALIASES = "family_member_aliases";
         public static final String PHONE_VERIFICATIONS = "phone_verifications";
         public static final String REFRESH_TOKENS = "refresh_tokens";

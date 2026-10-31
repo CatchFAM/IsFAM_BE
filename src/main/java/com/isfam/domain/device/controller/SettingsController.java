@@ -3,7 +3,7 @@ package com.isfam.domain.device.controller;
 import com.isfam.common.security.CurrentUser;
 import com.isfam.common.security.DeviceId;
 import com.isfam.domain.device.dto.SettingsDto;
-import com.isfam.domain.device.service.DeviceService;
+import com.isfam.domain.device.service.SettingsService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -15,31 +15,32 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * 계정 설정 — 실제로는 단말 단위입니다. 항목이 전부 devices 컬럼이라
- * device 도메인에 두고 DeviceService 를 그대로 씁니다.
+ * 설정 — 알림·자동분석은 계정 단위, OS 권한은 기기 단위입니다.
+ * 응답은 둘을 합쳐 설정 화면 한 장 분량으로 내려줍니다.
  */
-@Tag(name = "settings", description = "알림 설정 · OS 권한 동기화")
+@Tag(name = "settings", description = "알림 · 자동분석 설정 · OS 권한 동기화")
 @RestController
 @RequestMapping("/settings")
 @RequiredArgsConstructor
 public class SettingsController {
 
-    private final DeviceService deviceService;
+    private final SettingsService settingsService;
 
-    @Operation(summary = "계정 설정 및 권한 상태 조회")
+    @Operation(summary = "설정 및 권한 상태 조회")
     @GetMapping
     public SettingsDto.SettingsResponse getSettings(@CurrentUser Long userId,
                                                     @DeviceId Long deviceId) {
-        return deviceService.getSettings(userId, deviceId);
+        return settingsService.get(userId, deviceId);
     }
 
-    @Operation(summary = "계정 알림설정 수정")
+    /** 보낸 항목만 바뀝니다. 통화분석 알림 전체와 세부 항목은 함께 보낼 수 없습니다 */
+    @Operation(summary = "알림 · 자동분석 설정 수정")
     @PutMapping
-    public SettingsDto.SettingsResponse updateNotification(
+    public SettingsDto.SettingsResponse updateSettings(
             @CurrentUser Long userId,
             @DeviceId Long deviceId,
-            @Valid @RequestBody SettingsDto.NotificationRequest request) {
-        return deviceService.updateNotificationEnabled(userId, deviceId, request.notificationEnabled());
+            @RequestBody SettingsDto.UpdateRequest request) {
+        return settingsService.update(userId, deviceId, request);
     }
 
     /** 앱 실행 시마다 OS 권한을 재확인해 동기화합니다 */
@@ -49,6 +50,6 @@ public class SettingsController {
             @CurrentUser Long userId,
             @DeviceId Long deviceId,
             @Valid @RequestBody SettingsDto.PermissionsRequest request) {
-        return deviceService.syncPermissions(userId, deviceId, request);
+        return settingsService.syncPermissions(userId, deviceId, request);
     }
 }
